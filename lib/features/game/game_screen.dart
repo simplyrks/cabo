@@ -386,6 +386,9 @@ class _PlayingScreenState extends ConsumerState<_PlayingScreen> {
     );
   }
 
+  bool get _iAmEliminated =>
+      gs.playerById(myId)?['isEliminated'] as bool? ?? false;
+
   Widget _buildTable(PowerSelectionState powerSel) {
     final myData = gs.playerById(myId);
     final opponents = gs.players.where((p) => p['id'] != myId).toList();
@@ -444,15 +447,37 @@ class _PlayingScreenState extends ConsumerState<_PlayingScreen> {
 
           const SizedBox(height: 16),
 
-          // My hand (bottom) + slap window indicator
+          // My hand (bottom)
           if (myData != null) ...[
+            if (_iAmEliminated)
+              Container(
+                margin: const EdgeInsets.only(bottom: 8),
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                decoration: BoxDecoration(
+                  color: AppColors.danger.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: AppColors.danger.withValues(alpha: 0.5)),
+                ),
+                child: const Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.cancel, color: AppColors.danger, size: 16),
+                    SizedBox(width: 8),
+                    Text(
+                      'You have been eliminated — too many wrong slaps!',
+                      style: TextStyle(color: AppColors.danger, fontSize: 12),
+                    ),
+                  ],
+                ),
+              ),
             PlayerHand(
               playerJson: myData,
               isLocalPlayer: true,
-              isCurrentTurn: isMyTurn,
+              isCurrentTurn: isMyTurn && !_iAmEliminated,
               peekedCardData: _peekedCards[myId] ?? {},
               highlightedSlots: myHighlighted,
-              onCardTap: _onMyCardTap(powerSel),
+              // Eliminated players cannot tap cards
+              onCardTap: _iAmEliminated ? null : _onMyCardTap(powerSel),
             ),
           ],
         ],
@@ -787,7 +812,7 @@ class _PlayingScreenState extends ConsumerState<_PlayingScreen> {
   }
 
   Widget _buildActionBar(PowerSelectionState powerSel) {
-    if (!isMyTurn) return const SizedBox(height: 16);
+    if (!isMyTurn || _iAmEliminated) return const SizedBox(height: 16);
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),

@@ -63,12 +63,17 @@ class GameState {
 
   bool get isCaboCalled => caboCallerId != null;
 
-  /// Get the next player in turn order.
+  /// Get the next active (connected & not eliminated) player in turn order.
   String? getNextPlayerId(String currentId) {
-    final connectedPlayers = players.where((p) => p.isConnected).toList();
-    if (connectedPlayers.isEmpty) return null;
-    final currentIndex = connectedPlayers.indexWhere((p) => p.id == currentId);
-    if (currentIndex == -1) return connectedPlayers.first.id;
-    return connectedPlayers[(currentIndex + 1) % connectedPlayers.length].id;
+    final activePlayers =
+        players.where((p) => p.isConnected && !p.isEliminated).toList();
+    if (activePlayers.isEmpty) return null;
+    final currentIndex = activePlayers.indexWhere((p) => p.id == currentId);
+    if (currentIndex == -1) return activePlayers.first.id;
+    return activePlayers[(currentIndex + 1) % activePlayers.length].id;
   }
+
+  /// Number of non-eliminated, connected players still in the round.
+  int get activePlayerCount =>
+      players.where((p) => p.isConnected && !p.isEliminated).length;
 }

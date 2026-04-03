@@ -332,10 +332,30 @@ class CaboServer {
     } else {
       final cardLabel = _cardLabel(
           result.revealedCard!.rank.name, result.revealedCard!.suit.name);
-      _log('❌ $name slapped $cardLabel — WRONG! Penalty card added.');
-      _checkAllAttempted(); // close window if everyone has now attempted
+      // Check if the wrong slap triggered elimination (too many penalty cards)
+      final eliminated =
+          _engine.state.getPlayer(session.playerId)?.isEliminated ?? false;
+      if (eliminated) {
+        _log('❌ $name slapped $cardLabel — WRONG! Too many penalties — $name is ELIMINATED! 💀');
+        _closeMatchWindow();
+        // If it was their turn, advance to next active player
+        if (_engine.state.currentPlayerId == session.playerId) {
+          _engine.state.currentPlayerId =
+              _engine.state.getNextPlayerId(session.playerId);
+          _engine.state.turnPhase = TurnPhase.waitingForDraw;
+        }
+      } else {
+        _log('❌ $name slapped $cardLabel — WRONG! Penalty card added.');
+        _checkAllAttempted();
+      }
     }
     _broadcastState();
+    // Elimination may leave only one active player → force round end
+    if (_engine.onlyOneActivePlayerLeft &&
+        _engine.state.phase == GamePhase.playing) {
+      _engine.state.phase = GamePhase.roundEnd;
+      _checkRoundEnd();
+    }
   }
 
   // ─── Disconnect ───────────────────────────────────────────────────────────────

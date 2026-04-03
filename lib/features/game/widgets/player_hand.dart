@@ -29,35 +29,49 @@ class PlayerHand extends StatelessWidget {
     final hand = playerJson['hand'] as List<dynamic>;
     final name = playerJson['name'] as String;
     final isConnected = playerJson['isConnected'] as bool? ?? true;
+    final isEliminated = playerJson['isEliminated'] as bool? ?? false;
 
-    return Column(
+    return Opacity(
+      opacity: isEliminated ? 0.45 : 1.0,
+      child: Column(
       mainAxisSize: MainAxisSize.min,
       children: [
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
           decoration: BoxDecoration(
-            color: isCurrentTurn
-                ? AppColors.highlight.withValues(alpha: 0.25)
-                : Colors.transparent,
+            color: isEliminated
+                ? AppColors.danger.withValues(alpha: 0.15)
+                : isCurrentTurn
+                    ? AppColors.highlight.withValues(alpha: 0.25)
+                    : Colors.transparent,
             borderRadius: BorderRadius.circular(20),
-            border: isCurrentTurn
-                ? Border.all(color: AppColors.highlight, width: 1)
-                : null,
+            border: isEliminated
+                ? Border.all(color: AppColors.danger, width: 1)
+                : isCurrentTurn
+                    ? Border.all(color: AppColors.highlight, width: 1)
+                    : null,
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              if (!isConnected)
+              if (isEliminated)
+                const Icon(Icons.cancel, size: 12, color: AppColors.danger),
+              if (isEliminated) const SizedBox(width: 4),
+              if (!isEliminated && !isConnected)
                 const Icon(Icons.wifi_off, size: 12, color: AppColors.danger),
-              if (!isConnected) const SizedBox(width: 4),
+              if (!isEliminated && !isConnected) const SizedBox(width: 4),
               Text(
-                isLocalPlayer ? '$name (You)' : name,
+                isEliminated
+                    ? '${isLocalPlayer ? 'You' : name} — OUT'
+                    : isLocalPlayer ? '$name (You)' : name,
                 style: TextStyle(
                   fontSize: 12,
                   fontWeight: FontWeight.w600,
-                  color: isCurrentTurn
-                      ? AppColors.highlight
-                      : AppColors.textSecondary,
+                  color: isEliminated
+                      ? AppColors.danger
+                      : isCurrentTurn
+                          ? AppColors.highlight
+                          : AppColors.textSecondary,
                 ),
               ),
             ],
@@ -120,6 +134,7 @@ class PlayerHand extends StatelessWidget {
           }),
         ),
       ],
+      ),
     );
   }
 }

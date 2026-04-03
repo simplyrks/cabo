@@ -41,15 +41,18 @@ class CardSlot {
 class Player {
   final String id;
   final String name;
-  /// 2x2 matrix. null means the card slot is empty (card was removed).
+  /// Hand matrix — starts 2×2, grows by rows when penalty cards overflow.
   final List<List<CaboCard?>> hand;
   bool isConnected;
+  /// True once a player accumulates too many penalty cards and is knocked out.
+  bool isEliminated;
 
   Player({
     required this.id,
     required this.name,
     List<List<CaboCard?>>? hand,
     this.isConnected = true,
+    this.isEliminated = false,
   }) : hand = hand ?? [
           [null, null],
           [null, null],
@@ -80,6 +83,7 @@ class Player {
             .map((row) => row.map((c) => c?.toJson()).toList())
             .toList(),
         'isConnected': isConnected,
+        'isEliminated': isEliminated,
       };
 
   factory Player.fromJson(Map<String, dynamic> json) {
@@ -94,6 +98,7 @@ class Player {
       name: json['name'] as String,
       hand: hand,
       isConnected: json['isConnected'] as bool? ?? true,
+      isEliminated: json['isEliminated'] as bool? ?? false,
     );
   }
 
@@ -105,5 +110,6 @@ class Player {
             .map((row) => row.map((c) => c != null ? {'hidden': true} : null).toList())
             .toList(),
         'isConnected': isConnected,
+        'isEliminated': isEliminated,
       };
 }

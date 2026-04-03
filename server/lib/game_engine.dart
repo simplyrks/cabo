@@ -341,22 +341,41 @@ class GameEngine {
     );
   }
 
-  void _dealPenaltyCard(String playerId) {
+  /// Deals one penalty card to the player.
+  /// Returns true if the player was eliminated (already at 8-card maximum).
+  bool _dealPenaltyCard(String playerId) {
     final player = state.getPlayer(playerId)!;
+
+    // Count filled slots across all rows
+    final filled = player.hand
+        .expand((row) => row)
+        .where((c) => c != null)
+        .length;
+
+    // Max 8 cards (4 original + 4 penalties). A 5th penalty = elimination.
+    if (filled >= 8) {
+      player.isEliminated = true;
+      return true;
+    }
+
     if (state.drawPile.isEmpty) _reshuffleDiscard();
-    if (state.drawPile.isEmpty) return; // edge case: no cards left
+    if (state.drawPile.isEmpty) return false; // no cards left — skip penalty
     final penalty = state.drawPile.removeLast();
-    // Find first empty slot
-    for (int r = 0; r < 2; r++) {
-      for (int c = 0; c < 2; c++) {
+
+    // Scan ALL rows (including any overflow rows) left-to-right, top-to-bottom
+    // so new penalty cards fill horizontally before starting a new row.
+    for (int r = 0; r < player.hand.length; r++) {
+      for (int c = 0; c < player.hand[r].length; c++) {
         if (player.hand[r][c] == null) {
           player.setCard(r, c, penalty);
-          return;
+          return false;
         }
       }
     }
-    // All existing slots full — expand hand with a new row
+
+    // Every existing slot is occupied — add a new overflow row.
     player.hand.add([penalty, null]);
+    return false;
   }
 
   // ─── Cabo ────────────────────────────────────────────────────────────────────
@@ -387,8 +406,16 @@ class GameEngine {
       );
     }).toList();
 
-    // Winner: fewest cards, then lowest total, then caller gets bonus
+    // Eliminated players sort to the bottom; among active players: fewest cards then lowest total
+    final eliminatedIds = state.players
+        .where((p) => p.isEliminated)
+        .map((p) => p.id)
+        .toSet();
+
     scores.sort((a, b) {
+      final aElim = eliminatedIds.contains(a.playerId);
+      final bElim = eliminatedIds.contains(b.playerId);
+      if (aElim != bElim) return aElim ? 1 : -1;
       if (a.cardCount != b.cardCount) return a.cardCount.compareTo(b.cardCount);
       return a.totalValue.compareTo(b.totalValue);
     });
@@ -405,6 +432,9 @@ class GameEngine {
             ))
         .toList();
   }
+
+  /// True when only one (or zero) active players remain — round should end.
+  bool get onlyOneActivePlayerLeft => state.activePlayerCount <= 1;
 
   // ─── Helpers ─────────────────────────────────────────────────────────────────
 
