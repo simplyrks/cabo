@@ -386,9 +386,8 @@ class GameEngine {
     if (state.isCaboCalled) throw Exception('Cabo already called');
 
     state.caboCallerId = playerId;
-    // Every other connected player gets one more turn
-    final connected = state.players.where((p) => p.isConnected).length;
-    state.turnsRemainingAfterCabo = connected - 1;
+    // End the round immediately when CABO is called
+    state.turnsRemainingAfterCabo = 0;
     _endTurn();
   }
 
