@@ -498,11 +498,34 @@ class GameEngine {
 
   Set<String> get confirmedPeekIds => Set.unmodifiable(_initialPeekDone);
 
+  /// Move one card from attacker's hand slot to the target's hand.
+  /// Fills an existing empty slot in the target's hand before adding a new row.
+  void giveCard(String attackerId, String targetId, int row, int col) {
+    final attacker = state.getPlayer(attackerId)!;
+    final target = state.getPlayer(targetId)!;
+    final card = attacker.hand[row][col];
+    if (card == null) throw Exception('No card at that slot');
+    attacker.removeCard(row, col);
+    // Fill first available empty slot, same logic as penalty card dealing
+    for (int r = 0; r < target.hand.length; r++) {
+      for (int c = 0; c < target.hand[r].length; c++) {
+        if (target.hand[r][c] == null) {
+          target.setCard(r, c, card);
+          return;
+        }
+      }
+    }
+    // No empty slot — add overflow row
+    target.hand.add([card, null]);
+  }
+
   /// Build personalised GameStatePayload for one player.
   GameStatePayload buildStateFor(
     String viewerId, {
     List<String> actionLog = const [],
     bool matchWindowOpen = false,
+    String? pendingGiveCardAttackerId,
+    String? pendingGiveCardTargetId,
   }) {
     // At round end reveal ALL cards to everyone
     final revealAll = state.phase == GamePhase.roundEnd;
@@ -525,6 +548,8 @@ class GameEngine {
       actionLog: List.unmodifiable(actionLog),
       peekConfirmedIds: List.unmodifiable(_initialPeekDone.toList()),
       matchWindowOpen: matchWindowOpen,
+      pendingGiveCardAttackerId: pendingGiveCardAttackerId,
+      pendingGiveCardTargetId: pendingGiveCardTargetId,
     );
   }
 }

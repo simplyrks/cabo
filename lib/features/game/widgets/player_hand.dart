@@ -24,6 +24,75 @@ class PlayerHand extends StatelessWidget {
     this.peekedCardData = const {},
   });
 
+  Widget _buildPenaltySection(List<dynamic> hand) {
+    final penaltyCards = <(int, int, dynamic)>[];
+    for (int r = 2; r < hand.length; r++) {
+      final rowData = hand[r] as List<dynamic>;
+      for (int c = 0; c < rowData.length; c++) {
+        if (rowData[c] != null) penaltyCards.add((r, c, rowData[c]));
+      }
+    }
+    if (penaltyCards.isEmpty) return const SizedBox.shrink();
+
+    // Split into columns of 2 (matching the 2 base rows)
+    final penaltyCols = <List<(int, int, dynamic)>>[];
+    for (int i = 0; i < penaltyCards.length; i += 2) {
+      penaltyCols.add(penaltyCards.sublist(i, (i + 2).clamp(0, penaltyCards.length)));
+    }
+
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: penaltyCols.map((col) => Padding(
+        padding: const EdgeInsets.only(left: 4),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: col.map((entry) {
+            final (r, c, cardData) = entry;
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 6),
+              child: _buildCard(r, c, cardData),
+            );
+          }).toList(),
+        ),
+      )).toList(),
+    );
+  }
+
+  Widget _buildCard(int row, int col, dynamic cardData) {
+    final isEmpty = cardData == null;
+    final isHidden = cardData is Map && cardData['hidden'] == true;
+    final isSelected = highlightedSlots.contains((row, col));
+    final peeked = peekedCardData[(row, col)];
+    final isPeeked = peeked != null;
+
+    Map<String, dynamic>? cardJson;
+    if (isPeeked) {
+      cardJson = peeked;
+    } else if (!isEmpty && !isHidden) {
+      cardJson = cardData as Map<String, dynamic>;
+    }
+
+    CardState state;
+    if (isEmpty) {
+      state = CardState.empty;
+    } else if (isSelected) {
+      state = CardState.selected;
+    } else if (isPeeked) {
+      state = CardState.faceUp;
+    } else {
+      state = CardState.faceDown;
+    }
+
+    return CardWidget(
+      cardJson: cardJson,
+      cardState: state,
+      onTap: onCardTap != null && !isEmpty ? () => onCardTap!(row, col) : null,
+      width: isLocalPlayer ? 64 : 46,
+      height: isLocalPlayer ? 92 : 66,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final hand = playerJson['hand'] as List<dynamic>;
@@ -78,60 +147,32 @@ class PlayerHand extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 6),
-        Column(
+        Row(
           mainAxisSize: MainAxisSize.min,
-          children: List.generate(hand.length, (row) {
-            final rowData = hand[row] as List<dynamic>;
-            return Padding(
-              padding: const EdgeInsets.only(bottom: 6),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: List.generate(2, (col) {
-                  final cardData = rowData[col];
-                  final isEmpty = cardData == null;
-                  final isHidden =
-                      cardData is Map && cardData['hidden'] == true;
-                  final isSelected = highlightedSlots.contains((row, col));
-                  final peeked = peekedCardData[(row, col)];
-                  final isPeeked = peeked != null;
-
-                  // Prefer peeked card data, then actual card data
-                  Map<String, dynamic>? cardJson;
-                  if (isPeeked) {
-                    cardJson = peeked;
-                  } else if (!isEmpty && !isHidden) {
-                    cardJson = cardData as Map<String, dynamic>;
-                  }
-
-                  CardState state;
-                  if (isEmpty) {
-                    state = CardState.empty;
-                  } else if (isSelected) {
-                    state = CardState.selected;
-                  } else if (isPeeked) {
-                    state = CardState.faceUp; // always show peeked cards
-                  } else if (cardJson != null) {
-                    state = CardState.faceDown;
-                  } else {
-                    state = CardState.faceDown;
-                  }
-
-                  return Padding(
-                    padding: const EdgeInsets.only(right: 6),
-                    child: CardWidget(
-                      cardJson: cardJson,
-                      cardState: state,
-                      onTap: onCardTap != null && !isEmpty
-                          ? () => onCardTap!(row, col)
-                          : null,
-                      width: isLocalPlayer ? 72 : 56,
-                      height: isLocalPlayer ? 104 : 82,
-                    ),
-                  );
-                }),
-              ),
-            );
-          }),
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Base 2x2 grid (rows 0–1)
+            Column(
+              mainAxisSize: MainAxisSize.min,
+              children: List.generate(hand.length.clamp(0, 2), (row) {
+                final rowData = hand[row] as List<dynamic>;
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 6),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: List.generate(2, (col) {
+                      return Padding(
+                        padding: const EdgeInsets.only(right: 6),
+                        child: _buildCard(row, col, rowData[col]),
+                      );
+                    }),
+                  ),
+                );
+              }),
+            ),
+            // Penalty cards (rows 2+): fill column-by-column, 2 per column
+            if (hand.length > 2) _buildPenaltySection(hand),
+          ],
         ),
       ],
       ),

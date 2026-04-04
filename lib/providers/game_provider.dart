@@ -96,6 +96,8 @@ class GameStateModel {
   final List<String> actionLog;
   final List<String> peekConfirmedIds;
   final bool matchWindowOpen;
+  final String? pendingGiveCardAttackerId;
+  final String? pendingGiveCardTargetId;
 
   const GameStateModel({
     required this.phase,
@@ -111,6 +113,8 @@ class GameStateModel {
     this.actionLog = const [],
     this.peekConfirmedIds = const [],
     this.matchWindowOpen = false,
+    this.pendingGiveCardAttackerId,
+    this.pendingGiveCardTargetId,
   });
 
   factory GameStateModel.fromPayload(GameStatePayload p) => GameStateModel(
@@ -127,6 +131,8 @@ class GameStateModel {
         actionLog: p.actionLog,
         peekConfirmedIds: p.peekConfirmedIds,
         matchWindowOpen: p.matchWindowOpen,
+        pendingGiveCardAttackerId: p.pendingGiveCardAttackerId,
+        pendingGiveCardTargetId: p.pendingGiveCardTargetId,
       );
 
   Map<String, dynamic>? playerById(String id) {

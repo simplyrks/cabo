@@ -22,6 +22,10 @@ class CaboServer {
   /// Players who have already used their one slap attempt this window.
   final Set<String> _slapAttemptedIds = {};
 
+  // ─── Pending give-card (after successful opponent slap) ───────────────────────
+  String? _pendingGiveCardAttackerId;
+  String? _pendingGiveCardTargetId;
+
   CaboServer({this.port = 8080});
 
   // ─── Lifecycle ────────────────────────────────────────────────────────────────
@@ -74,6 +78,7 @@ class CaboServer {
         case MsgType.usePower:       _onUsePower(ws, msg.payload);
         case MsgType.skipPower:      _onSkipPower(ws, msg.payload);
         case MsgType.matchCard:      _onMatchCard(ws, msg.payload);
+        case MsgType.giveCard:       _onGiveCard(ws, msg.payload);
         default: _sendError(ws, 'Unknown message type: ${msg.type}');
       }
     } catch (e) {
@@ -275,6 +280,31 @@ class CaboServer {
     _checkRoundEnd();
   }
 
+  void _onGiveCard(WebSocket ws, Map<String, dynamic> payload) {
+    final session = _sessionFor(ws);
+    if (session == null) return;
+    if (_pendingGiveCardAttackerId != session.playerId) return; // not their turn to give
+
+    final row = payload['row'] as int;
+    final col = payload['col'] as int;
+    final targetId = _pendingGiveCardTargetId!;
+    final attackerName = _nameOf(session.playerId);
+    final targetName = _nameOf(targetId);
+
+    try {
+      _engine.giveCard(session.playerId, targetId, row, col);
+      _log('$attackerName gave a card to $targetName.');
+    } catch (e) {
+      _sendError(ws, e.toString());
+      return;
+    }
+
+    _pendingGiveCardAttackerId = null;
+    _pendingGiveCardTargetId = null;
+    _broadcastState();
+    _checkRoundEnd();
+  }
+
   void _onMatchCard(WebSocket ws, Map<String, dynamic> payload) {
     final session = _sessionFor(ws);
     if (session == null) return;
@@ -282,8 +312,8 @@ class CaboServer {
     final row = payload['row'] as int;
     final col = payload['col'] as int;
 
-    // Players can only slap their OWN cards
-    final targetId = session.playerId;
+    // Target may be the player themselves or an opponent
+    final targetId = payload['targetId'] as String? ?? session.playerId;
 
     // Window is closed — no penalty
     if (!_matchWindowOpen) {
@@ -325,7 +355,15 @@ class CaboServer {
       final cardLabel = result.revealedCard != null
           ? _cardLabel(result.revealedCard!.rank.name, result.revealedCard!.suit.name)
           : 'a card';
-      _log('⚡ $name slapped $cardLabel — matches the discard! Card removed.');
+      final isOpponentSlap = targetId != session.playerId;
+      if (isOpponentSlap) {
+        final targetName = _nameOf(targetId);
+        _pendingGiveCardAttackerId = session.playerId;
+        _pendingGiveCardTargetId = targetId;
+        _log('⚡ $name slapped $cardLabel from $targetName — correct! Now give one of your cards to $targetName.');
+      } else {
+        _log('⚡ $name slapped $cardLabel — matches the discard! Card removed.');
+      }
     } else if (result.revealedCard == null) {
       _log('$name tried to slap an empty slot — no penalty.');
       _checkAllAttempted();
@@ -371,6 +409,18 @@ class CaboServer {
     _engine.removePlayer(session.playerId);
     print('[Server] $name disconnected');
     _log('$name disconnected.');
+
+    // If no one is connected anymore, reset to a fresh lobby so new players can join.
+    if (_sessions.isEmpty) {
+      _engine = GameEngine();
+      _actionLog.clear();
+      _closeMatchWindow();
+      _pendingGiveCardAttackerId = null;
+      _pendingGiveCardTargetId = null;
+      print('[Server] All players disconnected — reset to lobby.');
+      return;
+    }
+
     if (_engine.state.phase == GamePhase.lobby) {
       _broadcastLobby();
     } else {
@@ -391,6 +441,8 @@ class CaboServer {
       final payload = RoundEndPayload(scores: scores, winnerId: winner.playerId);
       _broadcast(GameMessage(type: MsgType.roundEnd, payload: payload.toJson()));
       _closeMatchWindow();
+      _pendingGiveCardAttackerId = null;
+      _pendingGiveCardTargetId = null;
       _engine = GameEngine();
       _actionLog.clear();
     }
@@ -442,6 +494,8 @@ class CaboServer {
       final statePayload = _engine.buildStateFor(
         session.playerId,
         actionLog: _actionLog,
+        pendingGiveCardAttackerId: _pendingGiveCardAttackerId,
+        pendingGiveCardTargetId: _pendingGiveCardTargetId,
         matchWindowOpen: _matchWindowOpen,
       );
       _send(session.socket, GameMessage(
@@ -471,7 +525,7 @@ class CaboServer {
 
   void _log(String entry) {
     _actionLog.insert(0, entry);
-    if (_actionLog.length > 8) _actionLog.removeLast();
+    if (_actionLog.length > 50) _actionLog.removeLast();
     print('[Action] $entry');
   }
 

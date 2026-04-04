@@ -6,7 +6,7 @@ import 'package:cabo/providers/game_provider.dart';
 import 'package:cabo_shared/models/messages.dart';
 import 'widgets/card_widget.dart';
 import 'widgets/player_hand.dart';
-import 'widgets/status_box.dart';
+import 'widgets/status_box.dart' show StatusBox, HistorySheet;
 
 // ─── Power selection state ────────────────────────────────────────────────────
 
@@ -272,6 +272,9 @@ class _PlayingScreenState extends ConsumerState<_PlayingScreen> {
   String _swapFlashText = '';
   /// Briefly shows red dot on discard after someone else grabs the slap
   bool _slapTaken = false;
+  /// Whether the local player must give a card to an opponent after a successful slap
+  bool _pendingGiveCard = false;
+  String? _pendingGiveCardTargetId;
 
   @override
   void initState() {
@@ -300,7 +303,7 @@ class _PlayingScreenState extends ConsumerState<_PlayingScreen> {
       }
     });
 
-    // Listen for swap actions and successful slaps in the log
+    // Listen for swap actions, successful slaps, and pending give-card state
     ref.listenManual(gameStateProvider, (prev, next) {
       if (next == null) return;
       final prevLog = prev?.actionLog ?? [];
@@ -318,7 +321,26 @@ class _PlayingScreenState extends ConsumerState<_PlayingScreen> {
           });
         }
       }
+      // Track pending give-card state
+      final myId = ref.read(localPlayerProvider)?.id;
+      final needsGive = next.pendingGiveCardAttackerId != null &&
+          next.pendingGiveCardAttackerId == myId;
+      if (_pendingGiveCard != needsGive) {
+        setState(() {
+          _pendingGiveCard = needsGive;
+          _pendingGiveCardTargetId = needsGive ? next.pendingGiveCardTargetId : null;
+        });
+      }
     });
+  }
+
+  String _giveCardTargetName() {
+    if (_pendingGiveCardTargetId == null) return 'opponent';
+    final player = gs.players.firstWhere(
+      (p) => p['id'] == _pendingGiveCardTargetId,
+      orElse: () => <String, dynamic>{},
+    );
+    return player['name'] as String? ?? 'opponent';
   }
 
   void _triggerSwapFlash(String msg) {
@@ -336,6 +358,14 @@ class _PlayingScreenState extends ConsumerState<_PlayingScreen> {
   String get myId => widget.localPlayer.id;
   GameStateModel get gs => widget.gameState;
 
+  void _openHistory(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (_) => HistorySheet(log: gs.actionLog),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final powerSel = ref.watch(_powerStateProvider);
@@ -346,35 +376,54 @@ class _PlayingScreenState extends ConsumerState<_PlayingScreen> {
           children: [
             Column(
               children: [
-                StatusBox(gs: gs, localPlayerId: myId),
+                StatusBox(
+                  gs: gs,
+                  localPlayerId: myId,
+                  onHistoryTap: () => _openHistory(context),
+                ),
                 Expanded(child: _buildTable(powerSel)),
                 _buildActionBar(powerSel),
               ],
             ),
+            // Give-card prompt — shown when attacker must give a card after opponent slap
+            if (_pendingGiveCard)
+              Positioned(
+                top: 44,
+                left: 0,
+                right: 0,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+                  color: AppColors.highlight.withValues(alpha: 0.92),
+                  child: Text(
+                    'Tap one of YOUR cards to give to ${_giveCardTargetName()}',
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      color: Colors.black87,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              ),
             // Swap flash — slim top banner
             if (_showSwapFlash)
               Positioned(
-                top: 0,
+                top: 44,
                 left: 0,
                 right: 0,
                 child: IgnorePointer(
-                  child: AnimatedOpacity(
-                    duration: const Duration(milliseconds: 250),
-                    opacity: _showSwapFlash ? 1.0 : 0.0,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 12, vertical: 6),
-                      color: AppColors.gold.withValues(alpha: 0.88),
-                      child: Text(
-                        _swapFlashText,
-                        textAlign: TextAlign.center,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          color: Colors.black87,
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                        ),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+                    color: AppColors.gold.withValues(alpha: 0.88),
+                    child: Text(
+                      _swapFlashText,
+                      textAlign: TextAlign.center,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Colors.black87,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
                       ),
                     ),
                   ),
@@ -393,95 +442,89 @@ class _PlayingScreenState extends ConsumerState<_PlayingScreen> {
     final myData = gs.playerById(myId);
     final opponents = gs.players.where((p) => p['id'] != myId).toList();
 
-    // Highlighted slot in my hand (selected own card for swaps)
     final myHighlighted = (powerSel.step == PowerStep.blindSwapTarget ||
             powerSel.step == PowerStep.blindSwapConfirm ||
             powerSel.step == PowerStep.smartSwapConfirm) &&
-        powerSel.myRow != null &&
-        powerSel.myCol != null
+        powerSel.myRow != null && powerSel.myCol != null
         ? {(powerSel.myRow!, powerSel.myCol!)}
         : <(int, int)>{};
 
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        children: [
-          // Opponents (top)
-          Wrap(
-            spacing: 16,
-            runSpacing: 16,
+    return Column(
+      children: [
+        // ── Opponents (top) ──────────────────────────────────────────────────
+        Padding(
+          padding: const EdgeInsets.fromLTRB(8, 8, 8, 0),
+          child: Wrap(
+            spacing: 12,
+            runSpacing: 8,
             alignment: WrapAlignment.center,
             children: opponents.map((opp) {
               final oid = opp['id'] as String;
-              final isTheirTurn = gs.currentPlayerId == oid;
-              return _buildOpponentHand(opp, oid, isTheirTurn, powerSel);
+              return _buildOpponentHand(opp, oid, gs.currentPlayerId == oid, powerSel);
             }).toList(),
           ),
+        ),
 
-          const SizedBox(height: 24),
-
-          // Centre: draw pile + discard
-          Row(
+        // ── Centre: draw pile + discard ──────────────────────────────────────
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          child: Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               _buildDrawPile(),
-              const SizedBox(width: 24),
+              const SizedBox(width: 20),
               _buildDiscardPile(),
             ],
           ),
+        ),
 
-          // Power instructions (always visible during usingPower)
-          if (isMyTurn && gs.turnPhase == 'usingPower')
-            _buildPowerInstructions(powerSel),
-
-          // Smart swap card comparison (shown when both cards are chosen)
-          if (isMyTurn &&
-              gs.turnPhase == 'usingPower' &&
-              powerSel.step == PowerStep.smartSwapConfirm)
+        // ── Mid-turn UI (power / drawn card) — compact horizontal layout ─────
+        if (isMyTurn && gs.drawnCard != null) _buildDrawnCardCompact(powerSel),
+        if (isMyTurn && gs.turnPhase == 'usingPower') ...[
+          _buildPowerInstructions(powerSel),
+          if (powerSel.step == PowerStep.smartSwapConfirm)
             _buildSmartSwapComparison(powerSel),
+        ],
 
-          const SizedBox(height: 16),
+        // ── Push my hand to the bottom ───────────────────────────────────────
+        const Spacer(),
 
-          // Drawn card (if it's my turn and I drew)
-          if (isMyTurn && gs.drawnCard != null) _buildDrawnCard(powerSel),
-
-          const SizedBox(height: 16),
-
-          // My hand (bottom)
-          if (myData != null) ...[
-            if (_iAmEliminated)
-              Container(
-                margin: const EdgeInsets.only(bottom: 8),
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                decoration: BoxDecoration(
-                  color: AppColors.danger.withValues(alpha: 0.15),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: AppColors.danger.withValues(alpha: 0.5)),
-                ),
-                child: const Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(Icons.cancel, color: AppColors.danger, size: 16),
-                    SizedBox(width: 8),
-                    Text(
-                      'You have been eliminated — too many wrong slaps!',
-                      style: TextStyle(color: AppColors.danger, fontSize: 12),
-                    ),
-                  ],
-                ),
+        // ── My hand ──────────────────────────────────────────────────────────
+        if (myData != null) ...[
+          if (_iAmEliminated)
+            Container(
+              margin: const EdgeInsets.only(bottom: 6, left: 12, right: 12),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              decoration: BoxDecoration(
+                color: AppColors.danger.withValues(alpha: 0.15),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: AppColors.danger.withValues(alpha: 0.4)),
               ),
-            PlayerHand(
+              child: const Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.cancel, color: AppColors.danger, size: 13),
+                  SizedBox(width: 6),
+                  Text(
+                    'Eliminated — too many wrong slaps!',
+                    style: TextStyle(color: AppColors.danger, fontSize: 11),
+                  ),
+                ],
+              ),
+            ),
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: PlayerHand(
               playerJson: myData,
               isLocalPlayer: true,
               isCurrentTurn: isMyTurn && !_iAmEliminated,
               peekedCardData: _peekedCards[myId] ?? {},
               highlightedSlots: myHighlighted,
-              // Eliminated players cannot tap cards
               onCardTap: _iAmEliminated ? null : _onMyCardTap(powerSel),
             ),
-          ],
+          ),
         ],
-      ),
+      ],
     );
   }
 
@@ -706,8 +749,8 @@ class _PlayingScreenState extends ConsumerState<_PlayingScreen> {
             CardWidget(
               cardJson: gs.topDiscard,
               cardState: gs.topDiscard != null ? CardState.faceUp : CardState.empty,
-              width: 64,
-              height: 90,
+              width: 52,
+              height: 74,
             ),
             // Status dot — top-right corner of discard card
             if (canSlap || _slapTaken)
@@ -759,56 +802,69 @@ class _PlayingScreenState extends ConsumerState<_PlayingScreen> {
     );
   }
 
-  Widget _buildDrawnCard(PowerSelectionState powerSel) {
-    return Column(
-      children: [
-        const Text(
-          'You drew:',
-          style: TextStyle(color: AppColors.textSecondary, fontSize: 13),
+  /// Compact horizontal drawn-card row: [card] [label + button]
+  Widget _buildDrawnCardCompact(PowerSelectionState powerSel) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          color: AppColors.surface,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: AppColors.highlight.withValues(alpha: 0.25)),
         ),
-        const SizedBox(height: 8),
-        CardWidget(
-          cardJson: gs.drawnCard,
-          cardState: CardState.faceUp,
-          width: 72,
-          height: 104,
-        ),
-        const SizedBox(height: 12),
-        if (gs.turnPhase == 'cardDrawn') ...[
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              ElevatedButton(
-                onPressed: () {
-                  final card = gs.drawnCard;
-                  if (card != null) {
-                    final rank = card['rank'] as String? ?? '';
-                    final suit = card['suit'] as String? ?? '';
-                    _initPowerStep(rank, suit);
-                  }
-                  ref.read(gameClientProvider).discardDrawn();
-                },
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.surface,
-                ),
-                child: const Text('Discard & use power'),
-              ),
-              const SizedBox(width: 12),
-              const Text(
-                'or tap your card to swap',
-                style: TextStyle(fontSize: 12, color: AppColors.textSecondary),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            CardWidget(
+              cardJson: gs.drawnCard,
+              cardState: CardState.faceUp,
+              width: 52,
+              height: 74,
+            ),
+            const SizedBox(width: 12),
+            if (gs.turnPhase == 'cardDrawn') ...[
+              Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'You drew this card',
+                    style: TextStyle(color: AppColors.textSecondary, fontSize: 11),
+                  ),
+                  const SizedBox(height: 6),
+                  ElevatedButton(
+                    onPressed: () {
+                      final card = gs.drawnCard;
+                      if (card != null) {
+                        _initPowerStep(
+                          card['rank'] as String? ?? '',
+                          card['suit'] as String? ?? '',
+                        );
+                      }
+                      ref.read(gameClientProvider).discardDrawn();
+                    },
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.surface,
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                      minimumSize: Size.zero,
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                    child: const Text('Discard & use power', style: TextStyle(fontSize: 12)),
+                  ),
+                  const SizedBox(height: 4),
+                  const Text(
+                    'or tap your card below to swap',
+                    style: TextStyle(fontSize: 11, color: AppColors.textSecondary),
+                  ),
+                ],
               ),
             ],
-          ),
-        ],
-        if (gs.turnPhase == 'usingPower') _buildPowerUI(powerSel),
-      ],
+          ],
+        ),
+      ),
     );
-  }
-
-  Widget _buildPowerUI(PowerSelectionState powerSel) {
-    // Instructions and skip are now handled by _buildPowerInstructions + _buildActionBar
-    return const SizedBox();
   }
 
   Widget _buildActionBar(PowerSelectionState powerSel) {
@@ -1017,6 +1073,10 @@ class _PlayingScreenState extends ConsumerState<_PlayingScreen> {
         );
       };
     }
+    // Pending give-card: select a card from own hand to give to opponent
+    if (_pendingGiveCard) {
+      return (row, col) => ref.read(gameClientProvider).giveCard(row, col);
+    }
     // Match window: any player can slap their own cards (not during active power step)
     if (gs.matchWindowOpen && powerSel.step == PowerStep.none) {
       return (row, col) =>
@@ -1035,6 +1095,10 @@ class _PlayingScreenState extends ConsumerState<_PlayingScreen> {
   }
 
   bool _canTapOpponentCard(PowerSelectionState powerSel, String oid) {
+    // During match window: any player can slap an opponent's card
+    if (gs.matchWindowOpen && powerSel.step == PowerStep.none && !_iAmEliminated) {
+      return true;
+    }
     if (!isMyTurn || gs.turnPhase != 'usingPower') return false;
     return powerSel.step == PowerStep.peekOpponent ||
         powerSel.step == PowerStep.blindSwapTarget ||
@@ -1053,6 +1117,11 @@ class _PlayingScreenState extends ConsumerState<_PlayingScreen> {
     PowerSelectionState powerSel,
   ) {
     final client = ref.read(gameClientProvider);
+    // Match window: slap an opponent's card
+    if (gs.matchWindowOpen && powerSel.step == PowerStep.none) {
+      client.matchCard(oid, row, col);
+      return;
+    }
     switch (powerSel.step) {
       case PowerStep.peekOpponent:
         client.usePeekOpponent(oid, row, col);
@@ -1303,11 +1372,11 @@ class _BackFaceSmall extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      width: 64,
-      height: 90,
+      width: 52,
+      height: 74,
       decoration: BoxDecoration(
         color: AppColors.cardBack,
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(7),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withValues(alpha: 0.3),

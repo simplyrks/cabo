@@ -24,7 +24,7 @@ jobs:
         run: flutter pub get
 
       - name: Build web
-        run: flutter build web --output=build/web
+        run: flutter build web --release --output=build/web
 
       - name: Deploy to Netlify
         uses: nwtgck/actions-netlify@v3

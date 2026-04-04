@@ -18,6 +18,7 @@ class MsgType {
   static const usePower = 'usePower';
   static const skipPower = 'skipPower';
   static const matchCard = 'matchCard'; // slap mechanic
+  static const giveCard = 'giveCard';   // after successful opponent slap
   static const peekResult = 'peekResult'; // client acks a peek
   static const initialPeekDone = 'initialPeekDone';
 
@@ -88,6 +89,10 @@ class GameStatePayload {
   final List<String> peekConfirmedIds;
   /// Whether the match/slap window is currently open.
   final bool matchWindowOpen;
+  /// Set to the attacker's player ID when they must give a card after a successful opponent slap.
+  final String? pendingGiveCardAttackerId;
+  /// The target player (opponent) for a pending give-card action.
+  final String? pendingGiveCardTargetId;
 
   const GameStatePayload({
     required this.phase,
@@ -103,6 +108,8 @@ class GameStatePayload {
     this.actionLog = const [],
     this.peekConfirmedIds = const [],
     this.matchWindowOpen = false,
+    this.pendingGiveCardAttackerId,
+    this.pendingGiveCardTargetId,
   });
 
   Map<String, dynamic> toJson() => {
@@ -119,6 +126,8 @@ class GameStatePayload {
         'actionLog': actionLog,
         'peekConfirmedIds': peekConfirmedIds,
         'matchWindowOpen': matchWindowOpen,
+        'pendingGiveCardAttackerId': pendingGiveCardAttackerId,
+        'pendingGiveCardTargetId': pendingGiveCardTargetId,
       };
 
   factory GameStatePayload.fromJson(Map<String, dynamic> json) {
@@ -150,6 +159,8 @@ class GameStatePayload {
               .toList() ??
           [],
       matchWindowOpen: json['matchWindowOpen'] as bool? ?? false,
+      pendingGiveCardAttackerId: json['pendingGiveCardAttackerId'] as String?,
+      pendingGiveCardTargetId: json['pendingGiveCardTargetId'] as String?,
     );
   }
 }

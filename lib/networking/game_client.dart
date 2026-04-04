@@ -134,6 +134,11 @@ class GameClient {
         payload: {'targetId': targetId, 'row': row, 'col': col},
       ));
 
+  void giveCard(int row, int col) => send(GameMessage(
+        type: MsgType.giveCard,
+        payload: {'row': row, 'col': col},
+      ));
+
   void dispose() {
     _channelSub?.cancel();
     _channel?.sink.close();
