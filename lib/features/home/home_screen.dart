@@ -13,7 +13,7 @@ class HomeScreen extends ConsumerStatefulWidget {
 
 class _HomeScreenState extends ConsumerState<HomeScreen> {
   final _nameCtrl = TextEditingController();
-  final _hostCtrl = TextEditingController(text: 'localhost');
+  final _hostCtrl = TextEditingController(text: 'cabo-production.up.railway.app');
   final _portCtrl = TextEditingController(text: '8080');
   @override
   void dispose() {
