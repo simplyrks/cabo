@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:cabo/core/theme/app_theme.dart';
@@ -12,6 +13,20 @@ class LobbyScreen extends ConsumerWidget {
     final lobby = ref.watch(lobbyProvider);
     final localPlayer = ref.watch(localPlayerProvider);
     final gameState = ref.watch(gameStateProvider);
+    final roomCode = ref.watch(roomCodeProvider)?.toUpperCase();
+    final lobbyError = ref.watch(lobbyErrorProvider);
+
+    // The join failed or the connection dropped — back to home with the reason
+    if (lobbyError != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (ref.read(lobbyErrorProvider) == null) return;
+        ref.read(lobbyErrorProvider.notifier).state = null;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(lobbyError), backgroundColor: AppColors.danger),
+        );
+        context.go('/');
+      });
+    }
 
     // Navigate to game screen once game starts
     if (gameState != null && gameState.phase != 'lobby') {
@@ -40,6 +55,10 @@ class LobbyScreen extends ConsumerWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
+                if (roomCode != null) ...[
+                  _RoomCodeBanner(code: roomCode),
+                  const SizedBox(height: 24),
+                ],
                 const Text(
                   'Players',
                   style: TextStyle(
@@ -176,6 +195,53 @@ class LobbyScreen extends ConsumerWidget {
             ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+class _RoomCodeBanner extends StatelessWidget {
+  final String code;
+
+  const _RoomCodeBanner({required this.code});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      decoration: BoxDecoration(
+        color: AppColors.gold.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.gold.withValues(alpha: 0.4)),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Game code — share it with your group',
+                  style: TextStyle(fontSize: 12, color: AppColors.textSecondary),
+                ),
+                Text(
+                  code,
+                  style: const TextStyle(
+                    fontSize: 28,
+                    fontWeight: FontWeight.w900,
+                    color: AppColors.gold,
+                    letterSpacing: 4,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          IconButton(
+            tooltip: 'Copy code',
+            icon: const Icon(Icons.copy, color: AppColors.gold),
+            onPressed: () => Clipboard.setData(ClipboardData(text: code)),
+          ),
+        ],
       ),
     );
   }

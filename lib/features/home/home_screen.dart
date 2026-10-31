@@ -1,7 +1,11 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:cabo/core/server_config.dart';
 import 'package:cabo/core/theme/app_theme.dart';
+import 'package:cabo/networking/room_api.dart';
 import 'package:cabo/providers/game_provider.dart';
 
 class HomeScreen extends ConsumerStatefulWidget {
@@ -13,36 +17,68 @@ class HomeScreen extends ConsumerStatefulWidget {
 
 class _HomeScreenState extends ConsumerState<HomeScreen> {
   final _nameCtrl = TextEditingController();
-  final _hostCtrl = TextEditingController(text: 'localhost');
-  final _portCtrl = TextEditingController(text: '8080');
+  final _codeCtrl = TextEditingController();
+  Timer? _refreshTimer;
+  List<RoomInfo>? _rooms; // null until the first load finishes
+  bool _roomsFailed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    // Coming home always gives up any seat, so no ghost players stay at a table.
+    ref.read(gameClientProvider).disconnect();
+    _loadRooms();
+    _refreshTimer =
+        Timer.periodic(const Duration(seconds: 3), (_) => _loadRooms());
+  }
+
   @override
   void dispose() {
+    _refreshTimer?.cancel();
     _nameCtrl.dispose();
-    _hostCtrl.dispose();
-    _portCtrl.dispose();
+    _codeCtrl.dispose();
     super.dispose();
   }
 
-  void _connect() {
+  Future<void> _loadRooms() async {
+    try {
+      final rooms = await fetchRooms();
+      if (!mounted) return;
+      setState(() {
+        _rooms = rooms;
+        _roomsFailed = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _roomsFailed = true);
+    }
+  }
+
+  void _joinWithCode() {
+    final room = normalizeRoomCode(_codeCtrl.text);
+    if (room == null) {
+      _showError('Enter a game code, like G3');
+      return;
+    }
+    _join(room);
+  }
+
+  void _join(String room) {
     final name = _nameCtrl.text.trim();
     if (name.isEmpty) {
       _showError('Please enter your name');
       return;
     }
-    final host = _hostCtrl.text.trim();
-    final port = int.tryParse(_portCtrl.text.trim()) ?? 8080;
 
     // Clear stale state from any previous session before reconnecting
-    ref.read(gameStateProvider.notifier).clear();
-    ref.read(roundEndProvider.notifier).state = null;
-    ref.read(roundEndGameStateProvider.notifier).state = null;
-    ref.read(lobbyProvider.notifier).reset();
-    ref.read(localPlayerProvider.notifier).state = null;
-    ref.read(peekRevealProvider.notifier).state = null;
+    resetGameSession(ref);
+    ref.read(roomCodeProvider.notifier).state = null;
+    ref.read(lobbyErrorProvider.notifier).state = null;
 
     // Connect (non-blocking) → start message routing → send joinLobby → navigate.
-    // Connection success is confirmed reactively when the server sends 'welcome'.
-    ref.read(connectionProvider.notifier).connect(host, port);
+    // The lobby handles the result: 'welcome' seats the player, an error sends
+    // them back here with the reason.
+    ref.read(connectionProvider.notifier).connect(room);
     ref.read(messageRouterProvider).start();
     ref.read(gameClientProvider).joinLobby(name);
     context.go('/lobby');
@@ -56,10 +92,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // When served over HTTPS (production), wss:// is used automatically
-    // and the port field is irrelevant — cloud proxies handle TLS on 443.
-    final isProduction = Uri.base.scheme == 'https';
-
     return Scaffold(
       body: Center(
         child: SingleChildScrollView(
@@ -97,58 +129,141 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                     prefixIcon: Icon(Icons.person_outline),
                   ),
                   textCapitalization: TextCapitalization.words,
-                  onSubmitted: (_) => _connect(),
                 ),
                 const SizedBox(height: 16),
 
-                // Host field
-                TextField(
-                  controller: _hostCtrl,
-                  decoration: InputDecoration(
-                    labelText: isProduction ? 'Server Hostname' : 'Server IP',
-                    hintText: isProduction
-                        ? 'your-app.up.railway.app'
-                        : 'localhost',
-                    prefixIcon: const Icon(Icons.dns_outlined),
-                  ),
-                  keyboardType: TextInputType.url,
-                ),
-
-                // Port field — only shown in local dev (HTTP)
-                if (!isProduction) ...[
-                  const SizedBox(height: 16),
-                  TextField(
-                    controller: _portCtrl,
-                    decoration: const InputDecoration(
-                      labelText: 'Port',
-                      prefixIcon: Icon(Icons.link),
-                    ),
-                    keyboardType: TextInputType.number,
-                  ),
-                ],
-                const SizedBox(height: 32),
-
-                // Connect button
+                // Create button
                 SizedBox(
                   width: double.infinity,
                   child: ElevatedButton(
-                    onPressed: _connect,
-                    child: const Text('Join Game'),
+                    onPressed: () => _join(newRoomPath),
+                    child: const Text('Create New Game'),
                   ),
                 ),
+                const SizedBox(height: 16),
 
-                const SizedBox(height: 24),
-                Text(
-                  isProduction
-                      ? 'Enter the Railway/Fly.io hostname above.\nAll connections use secure WebSocket (wss://) automatically.'
-                      : 'Make sure the server is running on the host machine.\nRun: dart run server/bin/main.dart',
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(fontSize: 12, color: AppColors.textSecondary),
+                // Join by code
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _codeCtrl,
+                        decoration: const InputDecoration(
+                          labelText: 'Game Code',
+                          hintText: 'G3',
+                          prefixIcon: Icon(Icons.tag),
+                        ),
+                        textCapitalization: TextCapitalization.characters,
+                        onSubmitted: (_) => _joinWithCode(),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    ElevatedButton(
+                      onPressed: _joinWithCode,
+                      child: const Text('Join'),
+                    ),
+                  ],
                 ),
+                const SizedBox(height: 32),
+
+                // Games list
+                const Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    'Games',
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.textPrimary,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                _buildRoomList(),
               ],
             ),
           ),
         ),
+      ),
+    );
+  }
+
+  Widget _buildRoomList() {
+    final rooms = _rooms;
+    if (_roomsFailed) {
+      return const _RoomListMessage('Could not reach the game server. Retrying...');
+    }
+    if (rooms == null) {
+      return const CircularProgressIndicator(color: AppColors.highlight);
+    }
+    if (rooms.isEmpty) {
+      return const _RoomListMessage('No games yet. Create one to get started.');
+    }
+    return Column(
+      children: rooms
+          .map((room) => _RoomTile(room: room, onJoin: () => _join(room.code)))
+          .toList(),
+    );
+  }
+}
+
+class _RoomListMessage extends StatelessWidget {
+  final String message;
+
+  const _RoomListMessage(this.message);
+
+  @override
+  Widget build(BuildContext context) {
+    return Text(
+      message,
+      textAlign: TextAlign.center,
+      style: const TextStyle(fontSize: 12, color: AppColors.textSecondary),
+    );
+  }
+}
+
+class _RoomTile extends StatelessWidget {
+  final RoomInfo room;
+  final VoidCallback onJoin;
+
+  const _RoomTile({required this.room, required this.onJoin});
+
+  @override
+  Widget build(BuildContext context) {
+    final detail = switch (room.status) {
+      'playing' => 'In progress',
+      'full' => 'Full',
+      _ => '${room.players}/${room.maxPlayers} players',
+    };
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        children: [
+          Text(
+            room.code.toUpperCase(),
+            style: const TextStyle(
+              fontWeight: FontWeight.bold,
+              color: AppColors.gold,
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              detail,
+              style: const TextStyle(color: AppColors.textSecondary),
+            ),
+          ),
+          TextButton(
+            onPressed: room.isJoinable ? onJoin : null,
+            child: const Text('Join'),
+          ),
+        ],
       ),
     );
   }

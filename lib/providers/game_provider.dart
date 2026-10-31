@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:cabo/core/server_config.dart';
 import 'package:cabo/networking/game_client.dart';
 import 'package:cabo_shared/models/messages.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -30,9 +31,9 @@ class ConnectionNotifier extends StateNotifier<ConnectionState> {
 
   /// Connects synchronously — the WebSocket sink buffers messages until open.
   /// Connection success is confirmed reactively via the 'welcome' message.
-  void connect(String host, int port) {
+  void connect(String room) {
     state = const ConnectionState(ConnectionStatus.connected);
-    client.connect(host, port);
+    client.connect(roomSocketUri(room));
   }
 }
 
@@ -50,6 +51,12 @@ class LocalPlayer {
 }
 
 final localPlayerProvider = StateProvider<LocalPlayer?>((_) => null);
+
+/// The code of the table this player is sitting at, as sent by the server.
+final roomCodeProvider = StateProvider<String?>((_) => null);
+
+/// Why a player couldn't get or keep a seat. The lobby shows it and goes home.
+final lobbyErrorProvider = StateProvider<String?>((_) => null);
 
 // ─── Lobby state ──────────────────────────────────────────────────────────────
 
@@ -167,6 +174,16 @@ final roundEndProvider = StateProvider<RoundEndPayload?>((_) => null);
 /// even after the server resets and sends lobby state.
 final roundEndGameStateProvider = StateProvider<GameStateModel?>((_) => null);
 
+/// Clears everything left over from the previous round.
+void resetGameSession(WidgetRef ref) {
+  ref.read(gameStateProvider.notifier).clear();
+  ref.read(roundEndProvider.notifier).state = null;
+  ref.read(roundEndGameStateProvider.notifier).state = null;
+  ref.read(lobbyProvider.notifier).reset();
+  ref.read(localPlayerProvider.notifier).state = null;
+  ref.read(peekRevealProvider.notifier).state = null;
+}
+
 // ─── Message listener ─────────────────────────────────────────────────────────
 
 /// Attach once at app start to route incoming messages to the right providers.
@@ -181,7 +198,11 @@ class MessageRouter {
     final client = _ref.read(gameClientProvider);
     _sub = client.messages.listen(
       _route,
-      onError: (_) {}, // swallow disconnect errors — reconnect is user-initiated
+      // Keep a more specific error from the server if it sent one before closing.
+      onError: (_) {
+        final error = _ref.read(lobbyErrorProvider.notifier);
+        error.state ??= 'Lost connection to the game server.';
+      },
       cancelOnError: false,
     );
   }
@@ -193,6 +214,8 @@ class MessageRouter {
         final name = msg.payload['playerName'] as String;
         _ref.read(localPlayerProvider.notifier).state =
             LocalPlayer(id: id, name: name);
+        _ref.read(roomCodeProvider.notifier).state =
+            msg.payload['roomCode'] as String?;
 
       case MsgType.lobbyState:
         final p = LobbyStatePayload(
@@ -226,8 +249,12 @@ class MessageRouter {
         break;
 
       case MsgType.error:
-        // TODO: surface to UI
-        break;
+        // No seat yet means the join failed, e.g. a wrong code or a full table.
+        if (_ref.read(localPlayerProvider) == null) {
+          _ref.read(lobbyErrorProvider.notifier).state =
+              msg.payload['message'] as String? ?? 'Could not join the game.';
+        }
+        // TODO: surface in-game errors to UI
     }
   }
 

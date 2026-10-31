@@ -6,6 +6,8 @@ import 'package:cabo_shared/models/messages.dart';
 
 /// Pure game logic — no I/O.
 class GameEngine {
+  static const maxPlayers = 4;
+
   final GameState state;
   final Random _rng;
 
@@ -43,13 +45,18 @@ class GameEngine {
 
   /// Returns the new player.
   Player addPlayer(String id, String name) {
-    if (state.players.length >= 4) throw Exception('Game is full');
+    if (state.players.length >= maxPlayers) throw Exception('Game is full');
     final player = Player(id: id, name: name);
     state.players.add(player);
     return player;
   }
 
   void removePlayer(String id) {
+    // In the lobby, free the seat. The first remaining player becomes host.
+    if (state.phase == GamePhase.lobby) {
+      state.players.removeWhere((p) => p.id == id);
+      return;
+    }
     final p = state.getPlayer(id);
     if (p != null) p.isConnected = false;
   }

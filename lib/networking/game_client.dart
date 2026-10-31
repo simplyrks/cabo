@@ -15,24 +15,8 @@ class GameClient {
 
   /// Connects to the server. Closes any existing connection first so
   /// reconnects don't leak channels or duplicate subscriptions.
-  ///
-  /// Automatically uses `wss://` when the app is served over HTTPS (production)
-  /// so the browser doesn't block mixed-content WebSocket connections.
-  void connect(String host, int port) {
-    // Cancel the old channel listener BEFORE closing it so the onDone
-    // callback doesn't fire an error into the broadcast controller.
-    _channelSub?.cancel();
-    _channelSub = null;
-    _channel?.sink.close();
-    _channel = null;
-
-    // On HTTPS (Netlify, Vercel, etc.) use wss:// — cloud proxies (Railway,
-    // Fly.io) handle TLS termination and forward plain WS internally.
-    // On HTTP (local dev) use ws://host:port as before.
-    final isSecure = Uri.base.scheme == 'https';
-    final uri = isSecure
-        ? Uri.parse('wss://$host')   // port 443 by default; proxy handles it
-        : Uri.parse('ws://$host:$port');
+  void connect(Uri uri) {
+    disconnect();
     _channel = WebSocketChannel.connect(uri);
     _channelSub = _channel!.stream.listen(
       (data) {
@@ -50,6 +34,15 @@ class GameClient {
       },
       cancelOnError: false,
     );
+  }
+
+  void disconnect() {
+    // Cancel the old channel listener BEFORE closing it so the onDone
+    // callback doesn't fire an error into the broadcast controller.
+    _channelSub?.cancel();
+    _channelSub = null;
+    _channel?.sink.close();
+    _channel = null;
   }
 
   void send(GameMessage msg) {

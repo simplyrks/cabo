@@ -1268,20 +1268,32 @@ class _RoundEndScreen extends ConsumerWidget {
               ),
             ),
 
-            // ── Back to home ──
+            // ── Next round ──
             Padding(
               padding: const EdgeInsets.all(16),
-              child: ElevatedButton(
-                onPressed: () {
-                  ref.read(roundEndProvider.notifier).state = null;
-                  ref.read(roundEndGameStateProvider.notifier).state = null;
-                  ref.read(gameStateProvider.notifier).clear();
-                  context.go('/');
-                },
-                style: ElevatedButton.styleFrom(
-                  minimumSize: const Size(double.infinity, 48),
-                ),
-                child: const Text('Back to Home'),
+              child: Column(
+                children: [
+                  ElevatedButton(
+                    onPressed: () {
+                      final name = localPlayer.name;
+                      resetGameSession(ref);
+                      ref.read(gameClientProvider).joinLobby(name);
+                      context.go('/lobby');
+                    },
+                    style: ElevatedButton.styleFrom(
+                      minimumSize: const Size(double.infinity, 48),
+                    ),
+                    child: const Text('Play Again'),
+                  ),
+                  const SizedBox(height: 8),
+                  TextButton(
+                    onPressed: () {
+                      resetGameSession(ref);
+                      context.go('/');
+                    },
+                    child: const Text('Back to Home'),
+                  ),
+                ],
               ),
             ),
           ],
