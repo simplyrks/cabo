@@ -282,6 +282,17 @@ class GameEngine {
   }
 
   /// Red King – Step 2: commit the swap (or pass null myRow/myCol to decline).
+  /// A random card position in the player's hand, or null if they have none.
+  (int, int)? randomOccupiedSlot(String playerId) {
+    final hand = state.getPlayer(playerId)!.hand;
+    final slots = <(int, int)>[
+      for (int r = 0; r < hand.length; r++)
+        for (int c = 0; c < hand[r].length; c++)
+          if (hand[r][c] != null) (r, c),
+    ];
+    return slots.isEmpty ? null : slots[_rng.nextInt(slots.length)];
+  }
+
   void useSmartSwapCommit(
     String playerId,
     int? myRow, int? myCol,
@@ -530,7 +541,6 @@ class GameEngine {
     String viewerId, {
     List<String> actionLog = const [],
     bool matchWindowOpen = false,
-    int matchWindowRemainingMs = 0,
     String? pendingGiveCardAttackerId,
     String? pendingGiveCardTargetId,
   }) {
@@ -555,7 +565,6 @@ class GameEngine {
       actionLog: List.unmodifiable(actionLog),
       peekConfirmedIds: List.unmodifiable(_initialPeekDone.toList()),
       matchWindowOpen: matchWindowOpen,
-      matchWindowRemainingMs: matchWindowRemainingMs,
       pendingGiveCardAttackerId: pendingGiveCardAttackerId,
       pendingGiveCardTargetId: pendingGiveCardTargetId,
     );

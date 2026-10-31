@@ -6,7 +6,8 @@ import 'package:cabo/providers/game_provider.dart';
 import 'package:cabo_shared/models/messages.dart';
 import 'widgets/card_widget.dart';
 import 'widgets/player_hand.dart';
-import 'widgets/slap_timer.dart';
+import 'widgets/card_pick_overlay.dart';
+import 'widgets/slap_status.dart';
 import 'widgets/status_box.dart' show StatusBox, HistorySheet;
 
 // ─── Power selection state ────────────────────────────────────────────────────
@@ -276,6 +277,34 @@ class _PlayingScreenState extends ConsumerState<_PlayingScreen> {
   /// Whether the local player must give a card to an opponent after a successful slap
   bool _pendingGiveCard = false;
   String? _pendingGiveCardTargetId;
+  /// The Queen/King pick being shown to everyone right now
+  CardsPickedPayload? _activePick;
+  final _tableKey = GlobalKey();
+  final Map<String, GlobalKey> _slotKeys = {};
+
+  GlobalKey _slotKey(String playerId, int row, int col) =>
+      _slotKeys.putIfAbsent('$playerId:$row:$col', GlobalKey.new);
+
+  /// Where a card slot is drawn right now, relative to the table.
+  Rect? _slotRect(String playerId, int row, int col) {
+    final slot = _slotKeys['$playerId:$row:$col']?.currentContext?.findRenderObject();
+    final table = _tableKey.currentContext?.findRenderObject();
+    if (slot is! RenderBox || table is! RenderBox || !slot.hasSize) return null;
+    return slot.localToGlobal(Offset.zero, ancestor: table) & slot.size;
+  }
+
+  String _playerName(String id) =>
+      gs.playerById(id)?['name'] as String? ?? 'Someone';
+
+  String _pickMessage(CardsPickedPayload pick) {
+    if (pick.actorId == myId) {
+      return 'You picked a card from ${_playerName(pick.targetId)}';
+    }
+    if (pick.targetId == myId) {
+      return '${_playerName(pick.actorId)} picked one of your cards';
+    }
+    return '${_playerName(pick.actorId)} picked a card from ${_playerName(pick.targetId)}';
+  }
 
   @override
   void initState() {
@@ -302,6 +331,13 @@ class _PlayingScreenState extends ConsumerState<_PlayingScreen> {
           }
         });
       }
+    });
+
+    // Queen/King: show everyone which positions were picked
+    ref.listenManual(cardsPickedProvider, (_, pick) {
+      if (pick == null) return;
+      setState(() => _activePick = pick);
+      _triggerSwapFlash(_pickMessage(pick));
     });
 
     // Listen for swap actions, successful slaps, and pending give-card state
@@ -374,6 +410,7 @@ class _PlayingScreenState extends ConsumerState<_PlayingScreen> {
     return Scaffold(
       body: SafeArea(
         child: Stack(
+          key: _tableKey,
           children: [
             Column(
               children: [
@@ -386,17 +423,40 @@ class _PlayingScreenState extends ConsumerState<_PlayingScreen> {
                 _buildActionBar(powerSel),
               ],
             ),
-            // Slap countdown — on the side, and never blocks taps on the cards
-            if (gs.matchWindowOpen)
-              Positioned.fill(
-                child: IgnorePointer(
-                  child: Align(
-                    alignment: Alignment.centerRight,
-                    child: Padding(
-                      padding: const EdgeInsets.only(right: 12),
-                      child: SlapTimer(remainingMs: gs.matchWindowRemainingMs),
+            // Slap status — on the side, and never blocks taps on the cards
+            Positioned.fill(
+              child: IgnorePointer(
+                child: Align(
+                  alignment: const Alignment(1, 0.2), // below the power instructions
+                  child: Padding(
+                    padding: const EdgeInsets.only(right: 12),
+                    child: SlapStatus(
+                      isActive: gs.matchWindowOpen && !_iAmEliminated,
                     ),
                   ),
+                ),
+              ),
+            ),
+            // Queen/King pick — plays over the table without holding up the game
+            if (_activePick != null)
+              Positioned.fill(
+                child: CardPickOverlay(
+                  key: ObjectKey(_activePick),
+                  slots: [
+                    if (_activePick!.actorRow != null &&
+                        _activePick!.actorCol != null)
+                      () => _slotRect(
+                            _activePick!.actorId,
+                            _activePick!.actorRow!,
+                            _activePick!.actorCol!,
+                          ),
+                    () => _slotRect(
+                          _activePick!.targetId,
+                          _activePick!.targetRow,
+                          _activePick!.targetCol,
+                        ),
+                  ],
+                  onDone: () => setState(() => _activePick = null),
                 ),
               ),
             // Give-card prompt — shown when attacker must give a card after opponent slap
@@ -534,6 +594,7 @@ class _PlayingScreenState extends ConsumerState<_PlayingScreen> {
               isCurrentTurn: isMyTurn && !_iAmEliminated,
               peekedCardData: _peekedCards[myId] ?? {},
               highlightedSlots: myHighlighted,
+              slotKey: (row, col) => _slotKey(myId, row, col),
               onCardTap: _iAmEliminated ? null : _onMyCardTap(powerSel),
             ),
           ),
@@ -702,6 +763,7 @@ class _PlayingScreenState extends ConsumerState<_PlayingScreen> {
         isCurrentTurn: isTheirTurn,
         peekedCardData: _peekedCards[oid] ?? {},
         highlightedSlots: theirHighlighted,
+        slotKey: (row, col) => _slotKey(oid, row, col),
         onCardTap: _canTapOpponentCard(powerSel, oid)
             ? (row, col) => _onOpponentCardTap(oid, row, col, powerSel)
             : null,
@@ -709,13 +771,9 @@ class _PlayingScreenState extends ConsumerState<_PlayingScreen> {
     );
   }
 
-  /// The next player has to wait for the slap timer before drawing.
-  bool get _canDraw =>
-      isMyTurn && gs.turnPhase == 'waitingForDraw' && !gs.matchWindowOpen;
-
   Widget _buildDrawPile() {
     return GestureDetector(
-      onTap: _canDraw
+      onTap: isMyTurn && gs.turnPhase == 'waitingForDraw'
           ? () => ref.read(gameClientProvider).drawFromPile()
           : null,
       child: Column(
@@ -736,7 +794,7 @@ class _PlayingScreenState extends ConsumerState<_PlayingScreen> {
             '${gs.drawPileCount} cards',
             style: const TextStyle(fontSize: 11, color: AppColors.textSecondary),
           ),
-          if (_canDraw)
+          if (isMyTurn && gs.turnPhase == 'waitingForDraw')
             const Text(
               'TAP TO DRAW',
               style: TextStyle(
@@ -1038,9 +1096,7 @@ class _PlayingScreenState extends ConsumerState<_PlayingScreen> {
           // ── Call CABO ──
           if (gs.turnPhase == 'waitingForDraw' && !gs.isCaboCalled)
             ElevatedButton(
-              onPressed: gs.matchWindowOpen
-                  ? null
-                  : () => ref.read(gameClientProvider).callCabo(),
+              onPressed: () => ref.read(gameClientProvider).callCabo(),
               style: ElevatedButton.styleFrom(
                 backgroundColor: AppColors.danger,
               ),
@@ -1054,6 +1110,11 @@ class _PlayingScreenState extends ConsumerState<_PlayingScreen> {
   // ─── Tap handlers ──────────────────────────────────────────────────────────
 
   void Function(int, int)? _onMyCardTap(PowerSelectionState powerSel) {
+    // Pending give-card comes first: slapping runs throughout the turn, so the
+    // player owing a card may also be holding a drawn card.
+    if (_pendingGiveCard) {
+      return (row, col) => ref.read(gameClientProvider).giveCard(row, col);
+    }
     // Swap drawn card with hand
     if (isMyTurn && gs.turnPhase == 'cardDrawn') {
       return (row, col) =>
@@ -1092,10 +1153,6 @@ class _PlayingScreenState extends ConsumerState<_PlayingScreen> {
           myCol: col,
         );
       };
-    }
-    // Pending give-card: select a card from own hand to give to opponent
-    if (_pendingGiveCard) {
-      return (row, col) => ref.read(gameClientProvider).giveCard(row, col);
     }
     // Match window: any player can slap their own cards (not during active power step)
     if (gs.matchWindowOpen && powerSel.step == PowerStep.none) {

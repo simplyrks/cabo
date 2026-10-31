@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -26,8 +25,6 @@ class GameRoom {
 
   // ─── Match window ─────────────────────────────────────────────────────────────
   bool _matchWindowOpen = false;
-  Timer? _matchWindowTimer;
-  DateTime? _matchWindowEndsAt;
   /// Players who have already used their one slap attempt this window.
   final Set<String> _slapAttemptedIds = {};
 
@@ -155,10 +152,6 @@ class GameRoom {
     final session = _sessionFor(ws);
     if (session == null) return;
     final name = _nameOf(session.playerId);
-    if (_matchWindowOpen) {
-      _sendError(ws, 'Wait for the slap timer to finish');
-      return;
-    }
     _engine.callCabo(session.playerId);
     _log('🚨 $name called CABO! Last round for everyone.');
     _broadcastState();
@@ -169,10 +162,6 @@ class GameRoom {
     final session = _sessionFor(ws);
     if (session == null) return;
     final name = _nameOf(session.playerId);
-    if (_matchWindowOpen) {
-      _sendError(ws, 'Wait for the slap timer to finish');
-      return;
-    }
     _engine.drawFromPile(session.playerId);
     _log('$name drew a card from the pile.');
     _broadcastState();
@@ -192,6 +181,9 @@ class GameRoom {
     final wouldBeNextId = _engine.state.getNextPlayerId(session.playerId);
 
     _engine.discardDrawn(session.playerId);
+
+    // Using a power is the one time slapping stops.
+    if (_engine.state.turnPhase == TurnPhase.usingPower) _closeMatchWindow();
 
     if (_engine.state.turnPhase == TurnPhase.usingPower) {
       final powerDesc = _powerDescription(drawnRank);
@@ -263,7 +255,12 @@ class GameRoom {
           payload['targetId'] as String,
           payload['theirRow'] as int, payload['theirCol'] as int,
         );
-        _log('$name blindly swapped one of their cards with $targetName\'s card!');
+        _log('$name used the Queen on $targetName\'s card.');
+        _broadcastCardsPicked(
+          pid, payload['myRow'] as int, payload['myCol'] as int,
+          payload['targetId'] as String,
+          payload['theirRow'] as int, payload['theirCol'] as int,
+        );
 
       case 'smartSwapPeek':
         final targetName = _nameOf(payload['targetId'] as String);
@@ -278,18 +275,25 @@ class GameRoom {
 
       case 'smartSwapCommit':
         final targetName = _nameOf(payload['targetId'] as String);
-        final didSwap = payload['myRow'] != null;
+        // Everyone sees the same thing whether or not cards were swapped, so
+        // if none was chosen, show a random position of the player's own.
+        final myRow = payload['myRow'] as int?;
+        final myCol = payload['myCol'] as int?;
+        final shownSlot = myRow != null && myCol != null
+            ? (myRow, myCol)
+            : _engine.randomOccupiedSlot(pid);
         _engine.useSmartSwapCommit(
           pid,
-          payload['myRow'] as int?, payload['myCol'] as int?,
+          myRow, myCol,
           payload['targetId'] as String,
           payload['theirRow'] as int, payload['theirCol'] as int,
         );
-        if (didSwap) {
-          _log('$name decided to swap with $targetName using the Red King!');
-        } else {
-          _log('$name peeked at $targetName\'s card but chose not to swap.');
-        }
+        _log('$name used the Red King on $targetName\'s card.');
+        _broadcastCardsPicked(
+          pid, shownSlot?.$1, shownSlot?.$2,
+          payload['targetId'] as String,
+          payload['theirRow'] as int, payload['theirCol'] as int,
+        );
 
       default:
         _sendError(ws, 'Unknown power action: $action');
@@ -396,13 +400,20 @@ class GameRoom {
           _engine.state.getPlayer(session.playerId)?.isEliminated ?? false;
       if (eliminated) {
         _log('❌ $name slapped $cardLabel — WRONG! Too many penalties — $name is ELIMINATED! 💀');
-        _closeMatchWindow();
         // If it was their turn, advance to next active player
         if (_engine.state.currentPlayerId == session.playerId) {
+          // They may have been holding a drawn card. Keep it in the game, under
+          // the top discard so it doesn't change what can be slapped.
+          final drawn = _engine.state.drawnCard;
+          if (drawn != null) {
+            _engine.state.discardPile.insert(0, drawn);
+            _engine.state.drawnCard = null;
+          }
           _engine.state.currentPlayerId =
               _engine.state.getNextPlayerId(session.playerId);
           _engine.state.turnPhase = TurnPhase.waitingForDraw;
         }
+        _checkAllAttempted();
       } else {
         _log('❌ $name slapped $cardLabel — WRONG! Penalty card added.');
         _checkAllAttempted();
@@ -477,43 +488,21 @@ class GameRoom {
 
   // ─── Match window helpers ─────────────────────────────────────────────────────
 
-  /// Open the slap window. Every window lasts [slapWindowSeconds], whatever
-  /// opened it. Each player gets one attempt per window (FCFS).
-  /// Window closes when: the timer runs out, a correct slap lands, or all
-  /// players have attempted. The next player can't draw or call CABO until then.
+  /// Open the slap window for the card now on top of the discard pile. Slapping
+  /// runs in the background and never holds up the game. Each player gets one
+  /// attempt per card, and the first correct slap takes it.
+  /// Window closes when: a correct slap lands, all players have attempted, or a
+  /// power is being used. Otherwise it stays open until the next discard.
   void _openMatchWindow() {
     if (_engine.state.phase != GamePhase.playing) return;
-    const duration = Duration(seconds: slapWindowSeconds);
-    _matchWindowTimer?.cancel();
     _matchWindowOpen = true;
-    _matchWindowEndsAt = DateTime.now().add(duration);
-    _matchWindowTimer = Timer(duration, () {
-      try {
-        _closeMatchWindow();
-        _broadcastState();
-      } catch (e) {
-        // An error here has no message handler above it and would stop the
-        // whole server, not just this room.
-        print('[Room $code] Slap timer error: $e');
-      }
-    });
     _slapAttemptedIds.clear();
     _broadcastState();
   }
 
   void _closeMatchWindow() {
-    _matchWindowTimer?.cancel();
-    _matchWindowTimer = null;
-    _matchWindowEndsAt = null;
     _matchWindowOpen = false;
     _slapAttemptedIds.clear();
-  }
-
-  int get _matchWindowRemainingMs {
-    final endsAt = _matchWindowEndsAt;
-    if (endsAt == null) return 0;
-    final ms = endsAt.difference(DateTime.now()).inMilliseconds;
-    return ms < 0 ? 0 : ms;
   }
 
   /// After each slap attempt, check if every connected player has had their
@@ -551,14 +540,32 @@ class GameRoom {
         actionLog: _actionLog,
         pendingGiveCardAttackerId: _pendingGiveCardAttackerId,
         pendingGiveCardTargetId: _pendingGiveCardTargetId,
-        matchWindowOpen: _matchWindowOpen,
-        matchWindowRemainingMs: _matchWindowRemainingMs,
+        // Closed for anyone who has already used their attempt on this card.
+        matchWindowOpen:
+            _matchWindowOpen && !_slapAttemptedIds.contains(session.playerId),
       );
       _send(session.socket, GameMessage(
         type: MsgType.gameStateUpdate,
         payload: statePayload.toJson(),
       ));
     }
+  }
+
+  void _broadcastCardsPicked(
+    String actorId, int? actorRow, int? actorCol,
+    String targetId, int targetRow, int targetCol,
+  ) {
+    _broadcast(GameMessage(
+      type: MsgType.cardsPicked,
+      payload: CardsPickedPayload(
+        actorId: actorId,
+        targetId: targetId,
+        actorRow: actorRow,
+        actorCol: actorCol,
+        targetRow: targetRow,
+        targetCol: targetCol,
+      ).toJson(),
+    ));
   }
 
   void _broadcast(GameMessage msg) {

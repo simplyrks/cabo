@@ -103,7 +103,6 @@ class GameStateModel {
   final List<String> actionLog;
   final List<String> peekConfirmedIds;
   final bool matchWindowOpen;
-  final int matchWindowRemainingMs;
   final String? pendingGiveCardAttackerId;
   final String? pendingGiveCardTargetId;
 
@@ -121,7 +120,6 @@ class GameStateModel {
     this.actionLog = const [],
     this.peekConfirmedIds = const [],
     this.matchWindowOpen = false,
-    this.matchWindowRemainingMs = 0,
     this.pendingGiveCardAttackerId,
     this.pendingGiveCardTargetId,
   });
@@ -140,7 +138,6 @@ class GameStateModel {
         actionLog: p.actionLog,
         peekConfirmedIds: p.peekConfirmedIds,
         matchWindowOpen: p.matchWindowOpen,
-        matchWindowRemainingMs: p.matchWindowRemainingMs,
         pendingGiveCardAttackerId: p.pendingGiveCardAttackerId,
         pendingGiveCardTargetId: p.pendingGiveCardTargetId,
       );
@@ -169,6 +166,11 @@ final gameStateProvider =
 /// Stores the last peek reveal so the UI can show a brief card flash.
 final peekRevealProvider = StateProvider<PeekRevealPayload?>((_) => null);
 
+// ─── Queen / King picks ───────────────────────────────────────────────────────
+
+/// The last card positions picked with a Queen or King, shown to everyone.
+final cardsPickedProvider = StateProvider<CardsPickedPayload?>((_) => null);
+
 // ─── Round end scores ─────────────────────────────────────────────────────────
 
 final roundEndProvider = StateProvider<RoundEndPayload?>((_) => null);
@@ -185,6 +187,7 @@ void resetGameSession(WidgetRef ref) {
   ref.read(lobbyProvider.notifier).reset();
   ref.read(localPlayerProvider.notifier).state = null;
   ref.read(peekRevealProvider.notifier).state = null;
+  ref.read(cardsPickedProvider.notifier).state = null;
 }
 
 // ─── Message listener ─────────────────────────────────────────────────────────
@@ -242,6 +245,10 @@ class MessageRouter {
       case MsgType.peekReveal:
         final p = PeekRevealPayload.fromJson(msg.payload);
         _ref.read(peekRevealProvider.notifier).state = p;
+
+      case MsgType.cardsPicked:
+        _ref.read(cardsPickedProvider.notifier).state =
+            CardsPickedPayload.fromJson(msg.payload);
 
       case MsgType.roundEnd:
         final p = RoundEndPayload.fromJson(msg.payload);

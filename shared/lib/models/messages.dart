@@ -5,9 +5,6 @@ import 'card_model.dart';
 import 'player_model.dart';
 import 'game_state.dart';
 
-/// How long players get to slap, every time a slap window opens.
-const slapWindowSeconds = 5;
-
 // ─── Message type constants ───────────────────────────────────────────────────
 
 class MsgType {
@@ -29,6 +26,7 @@ class MsgType {
   static const lobbyState = 'lobbyState';
   static const gameStateUpdate = 'gameStateUpdate';
   static const peekReveal = 'peekReveal'; // server reveals a card to ONE player
+  static const cardsPicked = 'cardsPicked'; // Queen/King: card positions, to everyone
   static const matchAttemptResult = 'matchAttemptResult';
   static const error = 'error';
   static const roundEnd = 'roundEnd';
@@ -92,9 +90,6 @@ class GameStatePayload {
   final List<String> peekConfirmedIds;
   /// Whether the match/slap window is currently open.
   final bool matchWindowOpen;
-  /// Time left in the open window. Sent as a duration, not a clock time, so a
-  /// wrong clock on a player's device can't change their countdown.
-  final int matchWindowRemainingMs;
   /// Set to the attacker's player ID when they must give a card after a successful opponent slap.
   final String? pendingGiveCardAttackerId;
   /// The target player (opponent) for a pending give-card action.
@@ -114,7 +109,6 @@ class GameStatePayload {
     this.actionLog = const [],
     this.peekConfirmedIds = const [],
     this.matchWindowOpen = false,
-    this.matchWindowRemainingMs = 0,
     this.pendingGiveCardAttackerId,
     this.pendingGiveCardTargetId,
   });
@@ -133,7 +127,6 @@ class GameStatePayload {
         'actionLog': actionLog,
         'peekConfirmedIds': peekConfirmedIds,
         'matchWindowOpen': matchWindowOpen,
-        'matchWindowRemainingMs': matchWindowRemainingMs,
         'pendingGiveCardAttackerId': pendingGiveCardAttackerId,
         'pendingGiveCardTargetId': pendingGiveCardTargetId,
       };
@@ -167,7 +160,6 @@ class GameStatePayload {
               .toList() ??
           [],
       matchWindowOpen: json['matchWindowOpen'] as bool? ?? false,
-      matchWindowRemainingMs: json['matchWindowRemainingMs'] as int? ?? 0,
       pendingGiveCardAttackerId: json['pendingGiveCardAttackerId'] as String?,
       pendingGiveCardTargetId: json['pendingGiveCardTargetId'] as String?,
     );
@@ -210,6 +202,45 @@ class PeekRevealPayload {
 }
 
 // ─── Match attempt result (server → all clients) ─────────────────────────────
+
+/// Which card positions a Queen or King picked. Sent to everyone, and on purpose
+/// says nothing about the cards themselves or whether a swap actually happened.
+class CardsPickedPayload {
+  final String actorId;
+  final String targetId;
+  final int? actorRow; // null only if the actor has no cards left
+  final int? actorCol;
+  final int targetRow;
+  final int targetCol;
+
+  const CardsPickedPayload({
+    required this.actorId,
+    required this.targetId,
+    this.actorRow,
+    this.actorCol,
+    required this.targetRow,
+    required this.targetCol,
+  });
+
+  Map<String, dynamic> toJson() => {
+        'actorId': actorId,
+        'targetId': targetId,
+        'actorRow': actorRow,
+        'actorCol': actorCol,
+        'targetRow': targetRow,
+        'targetCol': targetCol,
+      };
+
+  factory CardsPickedPayload.fromJson(Map<String, dynamic> json) =>
+      CardsPickedPayload(
+        actorId: json['actorId'] as String,
+        targetId: json['targetId'] as String,
+        actorRow: json['actorRow'] as int?,
+        actorCol: json['actorCol'] as int?,
+        targetRow: json['targetRow'] as int,
+        targetCol: json['targetCol'] as int,
+      );
+}
 
 class MatchAttemptResultPayload {
   final String attemptingPlayerId;

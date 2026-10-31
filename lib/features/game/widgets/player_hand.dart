@@ -14,6 +14,9 @@ class PlayerHand extends StatelessWidget {
   /// Key = (row, col), value = full card JSON {suit, rank}.
   final Map<(int, int), Map<String, dynamic>> peekedCardData;
 
+  /// Lets the game screen find where a card slot is drawn.
+  final GlobalKey Function(int row, int col)? slotKey;
+
   const PlayerHand({
     super.key,
     required this.playerJson,
@@ -22,6 +25,7 @@ class PlayerHand extends StatelessWidget {
     this.onCardTap,
     this.highlightedSlots = const {},
     this.peekedCardData = const {},
+    this.slotKey,
   });
 
   Widget _buildPenaltySection(List<dynamic> hand) {
@@ -84,12 +88,15 @@ class PlayerHand extends StatelessWidget {
       state = CardState.faceDown;
     }
 
-    return CardWidget(
-      cardJson: cardJson,
-      cardState: state,
-      onTap: onCardTap != null && !isEmpty ? () => onCardTap!(row, col) : null,
-      width: isLocalPlayer ? 64 : 46,
-      height: isLocalPlayer ? 92 : 66,
+    return KeyedSubtree(
+      key: slotKey?.call(row, col),
+      child: CardWidget(
+        cardJson: cardJson,
+        cardState: state,
+        onTap: onCardTap != null && !isEmpty ? () => onCardTap!(row, col) : null,
+        width: isLocalPlayer ? 64 : 46,
+        height: isLocalPlayer ? 92 : 66,
+      ),
     );
   }
 
