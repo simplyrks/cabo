@@ -123,6 +123,8 @@ class StatusBox extends StatelessWidget {
     final prefix = isMyTurn ? 'Your turn' : "$currentName's turn";
 
     final suffix = switch (gs.turnPhase) {
+      'waitingForDraw' when gs.matchWindowOpen =>
+        isMyTurn ? '— Draw when the slap timer ends' : '— slap time',
       'waitingForDraw' => isMyTurn ? '— Draw a card or call CABO' : '— waiting to draw',
       'cardDrawn'      => isMyTurn ? '— Swap with hand or discard' : '— deciding...',
       'usingPower'     => isMyTurn ? '— Using power' : '— using power...',

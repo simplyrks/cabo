@@ -6,6 +6,7 @@ import 'package:cabo/providers/game_provider.dart';
 import 'package:cabo_shared/models/messages.dart';
 import 'widgets/card_widget.dart';
 import 'widgets/player_hand.dart';
+import 'widgets/slap_timer.dart';
 import 'widgets/status_box.dart' show StatusBox, HistorySheet;
 
 // ─── Power selection state ────────────────────────────────────────────────────
@@ -385,6 +386,19 @@ class _PlayingScreenState extends ConsumerState<_PlayingScreen> {
                 _buildActionBar(powerSel),
               ],
             ),
+            // Slap countdown — on the side, and never blocks taps on the cards
+            if (gs.matchWindowOpen)
+              Positioned.fill(
+                child: IgnorePointer(
+                  child: Align(
+                    alignment: Alignment.centerRight,
+                    child: Padding(
+                      padding: const EdgeInsets.only(right: 12),
+                      child: SlapTimer(remainingMs: gs.matchWindowRemainingMs),
+                    ),
+                  ),
+                ),
+              ),
             // Give-card prompt — shown when attacker must give a card after opponent slap
             if (_pendingGiveCard)
               Positioned(
@@ -695,9 +709,13 @@ class _PlayingScreenState extends ConsumerState<_PlayingScreen> {
     );
   }
 
+  /// The next player has to wait for the slap timer before drawing.
+  bool get _canDraw =>
+      isMyTurn && gs.turnPhase == 'waitingForDraw' && !gs.matchWindowOpen;
+
   Widget _buildDrawPile() {
     return GestureDetector(
-      onTap: isMyTurn && gs.turnPhase == 'waitingForDraw'
+      onTap: _canDraw
           ? () => ref.read(gameClientProvider).drawFromPile()
           : null,
       child: Column(
@@ -718,7 +736,7 @@ class _PlayingScreenState extends ConsumerState<_PlayingScreen> {
             '${gs.drawPileCount} cards',
             style: const TextStyle(fontSize: 11, color: AppColors.textSecondary),
           ),
-          if (isMyTurn && gs.turnPhase == 'waitingForDraw')
+          if (_canDraw)
             const Text(
               'TAP TO DRAW',
               style: TextStyle(
@@ -1020,7 +1038,9 @@ class _PlayingScreenState extends ConsumerState<_PlayingScreen> {
           // ── Call CABO ──
           if (gs.turnPhase == 'waitingForDraw' && !gs.isCaboCalled)
             ElevatedButton(
-              onPressed: () => ref.read(gameClientProvider).callCabo(),
+              onPressed: gs.matchWindowOpen
+                  ? null
+                  : () => ref.read(gameClientProvider).callCabo(),
               style: ElevatedButton.styleFrom(
                 backgroundColor: AppColors.danger,
               ),

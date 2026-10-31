@@ -103,6 +103,7 @@ class GameStateModel {
   final List<String> actionLog;
   final List<String> peekConfirmedIds;
   final bool matchWindowOpen;
+  final int matchWindowRemainingMs;
   final String? pendingGiveCardAttackerId;
   final String? pendingGiveCardTargetId;
 
@@ -120,6 +121,7 @@ class GameStateModel {
     this.actionLog = const [],
     this.peekConfirmedIds = const [],
     this.matchWindowOpen = false,
+    this.matchWindowRemainingMs = 0,
     this.pendingGiveCardAttackerId,
     this.pendingGiveCardTargetId,
   });
@@ -138,6 +140,7 @@ class GameStateModel {
         actionLog: p.actionLog,
         peekConfirmedIds: p.peekConfirmedIds,
         matchWindowOpen: p.matchWindowOpen,
+        matchWindowRemainingMs: p.matchWindowRemainingMs,
         pendingGiveCardAttackerId: p.pendingGiveCardAttackerId,
         pendingGiveCardTargetId: p.pendingGiveCardTargetId,
       );

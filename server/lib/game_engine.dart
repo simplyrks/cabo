@@ -530,6 +530,7 @@ class GameEngine {
     String viewerId, {
     List<String> actionLog = const [],
     bool matchWindowOpen = false,
+    int matchWindowRemainingMs = 0,
     String? pendingGiveCardAttackerId,
     String? pendingGiveCardTargetId,
   }) {
@@ -554,6 +555,7 @@ class GameEngine {
       actionLog: List.unmodifiable(actionLog),
       peekConfirmedIds: List.unmodifiable(_initialPeekDone.toList()),
       matchWindowOpen: matchWindowOpen,
+      matchWindowRemainingMs: matchWindowRemainingMs,
       pendingGiveCardAttackerId: pendingGiveCardAttackerId,
       pendingGiveCardTargetId: pendingGiveCardTargetId,
     );

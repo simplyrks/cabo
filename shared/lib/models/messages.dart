@@ -5,6 +5,9 @@ import 'card_model.dart';
 import 'player_model.dart';
 import 'game_state.dart';
 
+/// How long players get to slap, every time a slap window opens.
+const slapWindowSeconds = 5;
+
 // ─── Message type constants ───────────────────────────────────────────────────
 
 class MsgType {
@@ -89,6 +92,9 @@ class GameStatePayload {
   final List<String> peekConfirmedIds;
   /// Whether the match/slap window is currently open.
   final bool matchWindowOpen;
+  /// Time left in the open window. Sent as a duration, not a clock time, so a
+  /// wrong clock on a player's device can't change their countdown.
+  final int matchWindowRemainingMs;
   /// Set to the attacker's player ID when they must give a card after a successful opponent slap.
   final String? pendingGiveCardAttackerId;
   /// The target player (opponent) for a pending give-card action.
@@ -108,6 +114,7 @@ class GameStatePayload {
     this.actionLog = const [],
     this.peekConfirmedIds = const [],
     this.matchWindowOpen = false,
+    this.matchWindowRemainingMs = 0,
     this.pendingGiveCardAttackerId,
     this.pendingGiveCardTargetId,
   });
@@ -126,6 +133,7 @@ class GameStatePayload {
         'actionLog': actionLog,
         'peekConfirmedIds': peekConfirmedIds,
         'matchWindowOpen': matchWindowOpen,
+        'matchWindowRemainingMs': matchWindowRemainingMs,
         'pendingGiveCardAttackerId': pendingGiveCardAttackerId,
         'pendingGiveCardTargetId': pendingGiveCardTargetId,
       };
@@ -159,6 +167,7 @@ class GameStatePayload {
               .toList() ??
           [],
       matchWindowOpen: json['matchWindowOpen'] as bool? ?? false,
+      matchWindowRemainingMs: json['matchWindowRemainingMs'] as int? ?? 0,
       pendingGiveCardAttackerId: json['pendingGiveCardAttackerId'] as String?,
       pendingGiveCardTargetId: json['pendingGiveCardTargetId'] as String?,
     );

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -25,6 +26,8 @@ class GameRoom {
 
   // ─── Match window ─────────────────────────────────────────────────────────────
   bool _matchWindowOpen = false;
+  Timer? _matchWindowTimer;
+  DateTime? _matchWindowEndsAt;
   /// Players who have already used their one slap attempt this window.
   final Set<String> _slapAttemptedIds = {};
 
@@ -152,7 +155,10 @@ class GameRoom {
     final session = _sessionFor(ws);
     if (session == null) return;
     final name = _nameOf(session.playerId);
-    _closeMatchWindow(); // calling cabo ends the slap window
+    if (_matchWindowOpen) {
+      _sendError(ws, 'Wait for the slap timer to finish');
+      return;
+    }
     _engine.callCabo(session.playerId);
     _log('🚨 $name called CABO! Last round for everyone.');
     _broadcastState();
@@ -163,7 +169,10 @@ class GameRoom {
     final session = _sessionFor(ws);
     if (session == null) return;
     final name = _nameOf(session.playerId);
-    _closeMatchWindow(); // drawing starts a new turn — slap window ends
+    if (_matchWindowOpen) {
+      _sendError(ws, 'Wait for the slap timer to finish');
+      return;
+    }
     _engine.drawFromPile(session.playerId);
     _log('$name drew a card from the pile.');
     _broadcastState();
@@ -198,7 +207,8 @@ class GameRoom {
     }
     _broadcastState();
     _checkRoundEnd();
-    if (_engine.state.phase != GamePhase.roundEnd) _openMatchWindow();
+    // A power card's slap window waits until the power is finished.
+    if (_engine.state.turnPhase != TurnPhase.usingPower) _openMatchWindow();
   }
 
   void _onSwapDrawnWithHand(WebSocket ws, Map<String, dynamic> payload) {
@@ -220,6 +230,7 @@ class GameRoom {
     _log('$name skipped their power. Next: ${_nameOf(_engine.state.currentPlayerId!)}\'s turn.');
     _broadcastState();
     _checkRoundEnd();
+    _openMatchWindow();
   }
 
   void _onUsePower(WebSocket ws, Map<String, dynamic> payload) {
@@ -287,6 +298,7 @@ class GameRoom {
 
     _broadcastState();
     _checkRoundEnd();
+    _openMatchWindow();
   }
 
   void _onGiveCard(WebSocket ws, Map<String, dynamic> payload) {
@@ -465,27 +477,54 @@ class GameRoom {
 
   // ─── Match window helpers ─────────────────────────────────────────────────────
 
-  /// Open the slap window. Each player gets one attempt per window (FCFS).
-  /// Window closes when: a correct slap lands, all players have attempted,
-  /// or the next turn action starts (draw / cabo).
+  /// Open the slap window. Every window lasts [slapWindowSeconds], whatever
+  /// opened it. Each player gets one attempt per window (FCFS).
+  /// Window closes when: the timer runs out, a correct slap lands, or all
+  /// players have attempted. The next player can't draw or call CABO until then.
   void _openMatchWindow() {
     if (_engine.state.phase != GamePhase.playing) return;
+    const duration = Duration(seconds: slapWindowSeconds);
+    _matchWindowTimer?.cancel();
     _matchWindowOpen = true;
+    _matchWindowEndsAt = DateTime.now().add(duration);
+    _matchWindowTimer = Timer(duration, () {
+      try {
+        _closeMatchWindow();
+        _broadcastState();
+      } catch (e) {
+        // An error here has no message handler above it and would stop the
+        // whole server, not just this room.
+        print('[Room $code] Slap timer error: $e');
+      }
+    });
     _slapAttemptedIds.clear();
     _broadcastState();
   }
 
   void _closeMatchWindow() {
+    _matchWindowTimer?.cancel();
+    _matchWindowTimer = null;
+    _matchWindowEndsAt = null;
     _matchWindowOpen = false;
     _slapAttemptedIds.clear();
+  }
+
+  int get _matchWindowRemainingMs {
+    final endsAt = _matchWindowEndsAt;
+    if (endsAt == null) return 0;
+    final ms = endsAt.difference(DateTime.now()).inMilliseconds;
+    return ms < 0 ? 0 : ms;
   }
 
   /// After each slap attempt, check if every connected player has had their
   /// one shot. If so, close the window automatically.
   void _checkAllAttempted() {
-    final connectedIds =
-        _engine.state.players.where((p) => p.isConnected).map((p) => p.id).toSet();
-    if (_slapAttemptedIds.containsAll(connectedIds)) {
+    // Eliminated players can't slap, so don't wait for them.
+    final activeIds = _engine.state.players
+        .where((p) => p.isConnected && !p.isEliminated)
+        .map((p) => p.id)
+        .toSet();
+    if (_slapAttemptedIds.containsAll(activeIds)) {
       _closeMatchWindow();
       _broadcastState();
     }
@@ -513,6 +552,7 @@ class GameRoom {
         pendingGiveCardAttackerId: _pendingGiveCardAttackerId,
         pendingGiveCardTargetId: _pendingGiveCardTargetId,
         matchWindowOpen: _matchWindowOpen,
+        matchWindowRemainingMs: _matchWindowRemainingMs,
       );
       _send(session.socket, GameMessage(
         type: MsgType.gameStateUpdate,
