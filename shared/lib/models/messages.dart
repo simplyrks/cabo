@@ -94,6 +94,10 @@ class GameStatePayload {
   final String? pendingGiveCardAttackerId;
   /// The target player (opponent) for a pending give-card action.
   final String? pendingGiveCardTargetId;
+  /// Set to the player looking at a peeked card. The game holds until it clears.
+  final String? peekHoldActorId;
+  /// The player whose card is being looked at, which may be the actor.
+  final String? peekHoldTargetId;
 
   const GameStatePayload({
     required this.phase,
@@ -111,6 +115,8 @@ class GameStatePayload {
     this.matchWindowOpen = false,
     this.pendingGiveCardAttackerId,
     this.pendingGiveCardTargetId,
+    this.peekHoldActorId,
+    this.peekHoldTargetId,
   });
 
   Map<String, dynamic> toJson() => {
@@ -129,6 +135,8 @@ class GameStatePayload {
         'matchWindowOpen': matchWindowOpen,
         'pendingGiveCardAttackerId': pendingGiveCardAttackerId,
         'pendingGiveCardTargetId': pendingGiveCardTargetId,
+        'peekHoldActorId': peekHoldActorId,
+        'peekHoldTargetId': peekHoldTargetId,
       };
 
   factory GameStatePayload.fromJson(Map<String, dynamic> json) {
@@ -162,6 +170,8 @@ class GameStatePayload {
       matchWindowOpen: json['matchWindowOpen'] as bool? ?? false,
       pendingGiveCardAttackerId: json['pendingGiveCardAttackerId'] as String?,
       pendingGiveCardTargetId: json['pendingGiveCardTargetId'] as String?,
+      peekHoldActorId: json['peekHoldActorId'] as String?,
+      peekHoldTargetId: json['peekHoldTargetId'] as String?,
     );
   }
 }

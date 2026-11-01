@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -31,6 +32,12 @@ class GameRoom {
   // ─── Pending give-card (after successful opponent slap) ───────────────────────
   String? _pendingGiveCardAttackerId;
   String? _pendingGiveCardTargetId;
+
+  // ─── Peek hold (the whole table waits while a 7/8/9/10 peek is on screen) ─────
+  static const _peekHoldDuration = Duration(seconds: 4);
+  String? _peekHoldActorId;
+  String? _peekHoldTargetId;
+  Timer? _peekHoldTimer;
 
   GameRoom({required this.code, required this.onEmpty});
 
@@ -74,6 +81,8 @@ class GameRoom {
   }
 
   void _handleMessage(WebSocket ws, GameMessage msg) {
+    // Nothing happens at the table during a peek hold, slaps included.
+    if (_peekHoldActorId != null && msg.type != MsgType.joinLobby) return;
     try {
       switch (msg.type) {
         case MsgType.joinLobby:      _onJoinLobby(ws, msg.payload);
@@ -237,6 +246,8 @@ class GameRoom {
         final reveal = _engine.usePeekOwn(pid, payload['row'] as int, payload['col'] as int);
         _send(ws, GameMessage(type: MsgType.peekReveal, payload: reveal.toJson()));
         _log('$name peeked at one of their own hidden cards.');
+        _startPeekHold(pid, pid);
+        return;
 
       case 'peekOpponent':
         final targetName = _nameOf(payload['targetId'] as String);
@@ -246,6 +257,8 @@ class GameRoom {
         );
         _send(ws, GameMessage(type: MsgType.peekReveal, payload: reveal.toJson()));
         _log('$name secretly peeked at one of $targetName\'s cards.');
+        _startPeekHold(pid, payload['targetId'] as String);
+        return;
 
       case 'blindSwap':
         final targetName = _nameOf(payload['targetId'] as String);
@@ -303,6 +316,30 @@ class GameRoom {
     _broadcastState();
     _checkRoundEnd();
     _openMatchWindow();
+  }
+
+  /// Hold the whole table while the peeked card is on screen. The turn stays
+  /// with the peeking player and slapping stays closed until the hold ends.
+  void _startPeekHold(String actorId, String targetId) {
+    _peekHoldActorId = actorId;
+    _peekHoldTargetId = targetId;
+    _broadcastState();
+    _peekHoldTimer = Timer(_peekHoldDuration, _endPeekHold);
+  }
+
+  void _endPeekHold() {
+    _clearPeekHold();
+    _engine.finishPeek();
+    _broadcastState();
+    _checkRoundEnd();
+    _openMatchWindow();
+  }
+
+  void _clearPeekHold() {
+    _peekHoldTimer?.cancel();
+    _peekHoldTimer = null;
+    _peekHoldActorId = null;
+    _peekHoldTargetId = null;
   }
 
   void _onGiveCard(WebSocket ws, Map<String, dynamic> payload) {
@@ -463,6 +500,7 @@ class GameRoom {
       _closeMatchWindow();
       _pendingGiveCardAttackerId = null;
       _pendingGiveCardTargetId = null;
+      _clearPeekHold();
       print('[Room $code] All players disconnected — reset to lobby.');
       return;
     }
@@ -551,6 +589,8 @@ class GameRoom {
         actionLog: _actionLog,
         pendingGiveCardAttackerId: _pendingGiveCardAttackerId,
         pendingGiveCardTargetId: _pendingGiveCardTargetId,
+        peekHoldActorId: _peekHoldActorId,
+        peekHoldTargetId: _peekHoldTargetId,
         // Closed for anyone who has already used their attempt on this card.
         matchWindowOpen:
             _matchWindowOpen && !_slapAttemptedIds.contains(session.playerId),

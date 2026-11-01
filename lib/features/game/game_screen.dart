@@ -300,6 +300,22 @@ class _PlayingScreenState extends ConsumerState<_PlayingScreen> {
   String _playerName(String id) =>
       gs.playerById(id)?['name'] as String? ?? 'Someone';
 
+  String _peekHoldMessage(String actorId, String targetId) {
+    final String looking;
+    if (actorId == myId) {
+      looking = targetId == myId
+          ? 'You are looking at your own card'
+          : "You are looking at ${_playerName(targetId)}'s card";
+    } else if (targetId == actorId) {
+      looking = '${_playerName(actorId)} is looking at their own card';
+    } else if (targetId == myId) {
+      looking = '${_playerName(actorId)} is looking at your card';
+    } else {
+      looking = "${_playerName(actorId)} is looking at ${_playerName(targetId)}'s card";
+    }
+    return '$looking — game on hold';
+  }
+
   String _pickMessage(CardsPickedPayload pick) {
     if (pick.actorId == myId) {
       return 'You picked a card from ${_playerName(pick.targetId)}';
@@ -325,16 +341,7 @@ class _PlayingScreenState extends ConsumerState<_PlayingScreen> {
         // Cache for smart swap decision (persists until swap is resolved)
         if (isSmartSwapPeek) _smartSwapPeekedCard = cardJson;
       });
-      // Clear opponent peek after 4 s (smart swap card stays in _smartSwapPeekedCard)
-      if (!isSmartSwapPeek) {
-        Future.delayed(const Duration(seconds: 4), () {
-          if (mounted) {
-            setState(() {
-              _peekedCards[key]?.remove((reveal.row, reveal.col));
-            });
-          }
-        });
-      }
+      // A 7/8/9/10 peek is covered again when the server ends the hold
     });
 
     // Queen/King: show everyone which positions were picked
@@ -368,8 +375,15 @@ class _PlayingScreenState extends ConsumerState<_PlayingScreen> {
       }
       // Track pending give-card state
       final myId = ref.read(localPlayerProvider)?.id;
-      // Note when my move lands, so a repeat tap on my card isn't taken as a slap
+      // The peek hold is over: cover the card again
+      if (prev?.peekHoldActorId != null && next.peekHoldActorId == null) {
+        setState(_peekedCards.clear);
+      }
+      // Note when my move lands, so a repeat tap on my card isn't taken as a slap.
+      // Not after a peek hold: that move was 4 seconds ago, and everyone's slap
+      // opens together.
       if (prev != null &&
+          prev.peekHoldActorId == null &&
           prev.currentPlayerId == myId &&
           prev.turnPhase != 'waitingForDraw' &&
           (next.currentPlayerId != myId || next.turnPhase == 'waitingForDraw')) {
@@ -522,6 +536,37 @@ class _PlayingScreenState extends ConsumerState<_PlayingScreen> {
                   ),
                 ),
               ),
+            // Peek hold — shown to everyone while a peeked card is on screen
+            if (gs.peekHoldActorId != null && gs.peekHoldTargetId != null)
+              Positioned(
+                top: 44,
+                left: 0,
+                right: 0,
+                child: IgnorePointer(
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+                    color: AppColors.highlight.withValues(alpha: 0.92),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const Icon(Icons.visibility, size: 15, color: Colors.black87),
+                        const SizedBox(width: 6),
+                        Flexible(
+                          child: Text(
+                            _peekHoldMessage(gs.peekHoldActorId!, gs.peekHoldTargetId!),
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(
+                              color: Colors.black87,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
           ],
         ),
       ),
@@ -573,7 +618,7 @@ class _PlayingScreenState extends ConsumerState<_PlayingScreen> {
 
         // ── Mid-turn UI (power / drawn card) — compact horizontal layout ─────
         if (isMyTurn && gs.drawnCard != null) _buildDrawnCardCompact(powerSel),
-        if (isMyTurn && gs.turnPhase == 'usingPower') ...[
+        if (isMyTurn && gs.turnPhase == 'usingPower' && gs.peekHoldActorId == null) ...[
           _buildPowerInstructions(powerSel),
           if (powerSel.step == PowerStep.smartSwapConfirm)
             _buildSmartSwapComparison(powerSel),

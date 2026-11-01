@@ -212,7 +212,6 @@ class GameEngine {
       col: col,
       card: card,
     );
-    _endTurn();
     return reveal;
   }
 
@@ -233,9 +232,11 @@ class GameEngine {
       col: col,
       card: card,
     );
-    _endTurn();
     return reveal;
   }
+
+  /// 7/8/9/10 – the player has finished looking at the peeked card.
+  void finishPeek() => _endTurn();
 
   /// Queen – blindly swap your card at (myRow,myCol) with target's (theirRow,theirCol).
   void useBlindSwap(
@@ -543,6 +544,8 @@ class GameEngine {
     bool matchWindowOpen = false,
     String? pendingGiveCardAttackerId,
     String? pendingGiveCardTargetId,
+    String? peekHoldActorId,
+    String? peekHoldTargetId,
   }) {
     // At round end reveal ALL cards to everyone
     final revealAll = state.phase == GamePhase.roundEnd;
@@ -567,6 +570,8 @@ class GameEngine {
       matchWindowOpen: matchWindowOpen,
       pendingGiveCardAttackerId: pendingGiveCardAttackerId,
       pendingGiveCardTargetId: pendingGiveCardTargetId,
+      peekHoldActorId: peekHoldActorId,
+      peekHoldTargetId: peekHoldTargetId,
     );
   }
 }
