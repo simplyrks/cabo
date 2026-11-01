@@ -17,6 +17,17 @@ class PlayerHand extends StatelessWidget {
   /// Lets the game screen find where a card slot is drawn.
   final GlobalKey Function(int row, int col)? slotKey;
 
+  /// Slots drawn invisibly while a card is flying to or from them. They keep
+  /// their place, and they can still be tapped.
+  final Set<(int, int)> hiddenSlots;
+
+  /// Deals the cards in one after another when this hand first appears.
+  final bool dealIn;
+
+  /// When known cards turn face up: [flipStart], then [flipStagger] per card.
+  final Duration flipStart;
+  final Duration flipStagger;
+
   const PlayerHand({
     super.key,
     required this.playerJson,
@@ -26,7 +37,13 @@ class PlayerHand extends StatelessWidget {
     this.highlightedSlots = const {},
     this.peekedCardData = const {},
     this.slotKey,
+    this.hiddenSlots = const {},
+    this.dealIn = false,
+    this.flipStart = Duration.zero,
+    this.flipStagger = Duration.zero,
   });
+
+  static const _dealGap = Duration(milliseconds: 130);
 
   Widget _buildPenaltySection(List<dynamic> hand) {
     final penaltyCards = <(int, int, dynamic)>[];
@@ -88,16 +105,21 @@ class PlayerHand extends StatelessWidget {
       state = CardState.faceDown;
     }
 
-    return KeyedSubtree(
-      key: slotKey?.call(row, col),
-      child: CardWidget(
-        cardJson: cardJson,
-        cardState: state,
-        onTap: onCardTap != null && !isEmpty ? () => onCardTap!(row, col) : null,
-        width: isLocalPlayer ? 64 : 46,
-        height: isLocalPlayer ? 92 : 66,
-      ),
+    final index = row * 2 + col;
+    Widget card = CardWidget(
+      cardJson: cardJson,
+      cardState: state,
+      onTap: onCardTap != null && !isEmpty ? () => onCardTap!(row, col) : null,
+      width: isLocalPlayer ? 64 : 46,
+      height: isLocalPlayer ? 92 : 66,
+      flipDelay: flipStart + flipStagger * index,
     );
+    if (dealIn) card = _DealIn(delay: _dealGap * index, child: card);
+    if (hiddenSlots.contains((row, col))) {
+      card = Opacity(opacity: 0, child: card);
+    }
+
+    return KeyedSubtree(key: slotKey?.call(row, col), child: card);
   }
 
   @override
@@ -107,12 +129,14 @@ class PlayerHand extends StatelessWidget {
     final isConnected = playerJson['isConnected'] as bool? ?? true;
     final isEliminated = playerJson['isEliminated'] as bool? ?? false;
 
-    return Opacity(
+    return AnimatedOpacity(
+      duration: const Duration(milliseconds: 500),
       opacity: isEliminated ? 0.45 : 1.0,
       child: Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Container(
+        AnimatedContainer(
+          duration: const Duration(milliseconds: 250),
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
           decoration: BoxDecoration(
             color: isEliminated
@@ -183,6 +207,57 @@ class PlayerHand extends StatelessWidget {
         ),
       ],
       ),
+    );
+  }
+}
+
+/// One card sliding in as it's dealt.
+class _DealIn extends StatefulWidget {
+  final Duration delay;
+  final Widget child;
+
+  const _DealIn({required this.delay, required this.child});
+
+  @override
+  State<_DealIn> createState() => _DealInState();
+}
+
+class _DealInState extends State<_DealIn> with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 350),
+    );
+    Future.delayed(widget.delay, () {
+      if (mounted) _ctrl.forward();
+    });
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _ctrl,
+      child: widget.child,
+      builder: (_, child) {
+        final t = Curves.easeOutCubic.transform(_ctrl.value);
+        return Opacity(
+          opacity: t,
+          child: Transform.translate(
+            offset: Offset(0, -220 * (1 - t)),
+            child: child,
+          ),
+        );
+      },
     );
   }
 }

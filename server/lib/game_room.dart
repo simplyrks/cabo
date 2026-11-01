@@ -1,7 +1,9 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 
+import 'package:cabo_shared/models/card_model.dart';
 import 'package:cabo_shared/models/messages.dart';
 import 'package:cabo_shared/models/game_state.dart';
 import 'game_engine.dart';
@@ -10,6 +12,29 @@ class ClientSession {
   final String playerId;
   final WebSocket socket;
   ClientSession({required this.playerId, required this.socket});
+}
+
+/// One player's attempt to slap the current discard.
+class _SlapAttempt {
+  final String playerId;
+  final String targetId;
+  final int row;
+  final int col;
+  /// When the player touched the card, on the server's clock.
+  final int tapAtUs;
+  /// When the slap reached the server. Breaks exact ties.
+  final int arrivedAtUs;
+  String result;
+
+  _SlapAttempt({
+    required this.playerId,
+    required this.targetId,
+    required this.row,
+    required this.col,
+    required this.tapAtUs,
+    required this.arrivedAtUs,
+    this.result = 'pending',
+  });
 }
 
 /// One isolated game table. Every room has its own engine, players and log, so
@@ -29,6 +54,24 @@ class GameRoom {
   /// Players who have already used their one slap attempt this window.
   final Set<String> _slapAttemptedIds = {};
 
+  // ─── Slap order ───────────────────────────────────────────────────────────────
+  /// How long a slap waits before it's judged, so that an earlier slap coming
+  /// over a slower connection still gets to rank first.
+  static const _slapSettle = Duration(milliseconds: 300);
+  /// A slap can't claim to have happened longer ago than this.
+  static const _maxTapAgeUs = 1000000;
+  /// The room's own clock. It only ever moves forward, unlike the time of day.
+  final _clock = Stopwatch()..start();
+  /// Every attempt on the current card, fastest first.
+  final List<_SlapAttempt> _slapAttempts = [];
+  Timer? _slapSettleTimer;
+  int _slapCardNo = 0;
+  int _windowOpenedAtUs = 0;
+  /// A correct slap has taken the current card.
+  bool _slapTaken = false;
+  /// How long a slapped card stays up front on every screen before it moves on.
+  static const _slapRevealMs = 1500;
+
   // ─── Pending give-card (after successful opponent slap) ───────────────────────
   String? _pendingGiveCardAttackerId;
   String? _pendingGiveCardTargetId;
@@ -37,6 +80,8 @@ class GameRoom {
   static const _peekHoldDuration = Duration(seconds: 4);
   String? _peekHoldActorId;
   String? _peekHoldTargetId;
+  int? _peekHoldRow;
+  int? _peekHoldCol;
   Timer? _peekHoldTimer;
 
   GameRoom({required this.code, required this.onEmpty});
@@ -81,8 +126,22 @@ class GameRoom {
   }
 
   void _handleMessage(WebSocket ws, GameMessage msg) {
+    if (msg.type == MsgType.clockPing) {
+      _send(ws, GameMessage(type: MsgType.clockPong, payload: {
+        'sentAt': msg.payload['sentAt'],
+        'serverAt': _clock.elapsedMicroseconds,
+      }));
+      return;
+    }
     // Nothing happens at the table during a peek hold, slaps included.
     if (_peekHoldActorId != null && msg.type != MsgType.joinLobby) return;
+    // Slaps waiting to be judged go first if this move could change a hand or
+    // the discard. Drawing changes neither, so it doesn't cut their wait short.
+    if (msg.type != MsgType.matchCard &&
+        msg.type != MsgType.joinLobby &&
+        msg.type != MsgType.drawFromPile) {
+      _resolveSlaps();
+    }
     try {
       switch (msg.type) {
         case MsgType.joinLobby:      _onJoinLobby(ws, msg.payload);
@@ -171,8 +230,18 @@ class GameRoom {
     final session = _sessionFor(ws);
     if (session == null) return;
     final name = _nameOf(session.playerId);
+    final reshufflesBefore = _engine.reshuffleCount;
     _engine.drawFromPile(session.playerId);
     _log('$name drew a card from the pile.');
+    _animate(TableAnimationPayload(
+      moves: [
+        CardMove(
+          from: const CardSpot.deckPile(),
+          to: CardSpot.heldBy(session.playerId),
+        ),
+      ],
+      reshuffled: _engine.reshuffleCount != reshufflesBefore,
+    ));
     _broadcastState();
   }
 
@@ -206,6 +275,16 @@ class GameRoom {
     } else {
       _log('$name discarded $cardName. Next: ${_nameOf(_engine.state.currentPlayerId!)}\'s turn.');
     }
+    _animate(TableAnimationPayload(
+      moves: [
+        CardMove(
+          from: CardSpot.heldBy(session.playerId),
+          to: const CardSpot.discardPile(),
+          card: drawnCard,
+        ),
+      ],
+      skippedPlayerId: drawnRank == 'jack' ? wouldBeNextId : null,
+    ));
     _broadcastState();
     _checkRoundEnd();
     // A power card's slap window waits until the power is finished.
@@ -216,8 +295,21 @@ class GameRoom {
     final session = _sessionFor(ws);
     if (session == null) return;
     final name = _nameOf(session.playerId);
-    _engine.swapDrawnWithHand(session.playerId, payload['row'] as int, payload['col'] as int);
+    final row = payload['row'] as int;
+    final col = payload['col'] as int;
+    final handCard = _engine.swapDrawnWithHand(session.playerId, row, col);
     _log('$name swapped their drawn card with one of their own cards.');
+    _animate(TableAnimationPayload(moves: [
+      CardMove(
+        from: CardSpot.heldBy(session.playerId),
+        to: CardSpot.inHand(session.playerId, row, col),
+      ),
+      CardMove(
+        from: CardSpot.inHand(session.playerId, row, col),
+        to: const CardSpot.discardPile(),
+        card: handCard,
+      ),
+    ]));
     _broadcastState();
     _checkRoundEnd();
     if (_engine.state.phase != GamePhase.roundEnd) _openMatchWindow();
@@ -246,7 +338,7 @@ class GameRoom {
         final reveal = _engine.usePeekOwn(pid, payload['row'] as int, payload['col'] as int);
         _send(ws, GameMessage(type: MsgType.peekReveal, payload: reveal.toJson()));
         _log('$name peeked at one of their own hidden cards.');
-        _startPeekHold(pid, pid);
+        _startPeekHold(pid, pid, payload['row'] as int, payload['col'] as int);
         return;
 
       case 'peekOpponent':
@@ -257,7 +349,10 @@ class GameRoom {
         );
         _send(ws, GameMessage(type: MsgType.peekReveal, payload: reveal.toJson()));
         _log('$name secretly peeked at one of $targetName\'s cards.');
-        _startPeekHold(pid, payload['targetId'] as String);
+        _startPeekHold(
+          pid, payload['targetId'] as String,
+          payload['row'] as int, payload['col'] as int,
+        );
         return;
 
       case 'blindSwap':
@@ -320,9 +415,11 @@ class GameRoom {
 
   /// Hold the whole table while the peeked card is on screen. The turn stays
   /// with the peeking player and slapping stays closed until the hold ends.
-  void _startPeekHold(String actorId, String targetId) {
+  void _startPeekHold(String actorId, String targetId, int row, int col) {
     _peekHoldActorId = actorId;
     _peekHoldTargetId = targetId;
+    _peekHoldRow = row;
+    _peekHoldCol = col;
     _broadcastState();
     _peekHoldTimer = Timer(_peekHoldDuration, _endPeekHold);
   }
@@ -340,6 +437,8 @@ class GameRoom {
     _peekHoldTimer = null;
     _peekHoldActorId = null;
     _peekHoldTargetId = null;
+    _peekHoldRow = null;
+    _peekHoldCol = null;
   }
 
   void _onGiveCard(WebSocket ws, Map<String, dynamic> payload) {
@@ -354,8 +453,14 @@ class GameRoom {
     final targetName = _nameOf(targetId);
 
     try {
-      _engine.giveCard(session.playerId, targetId, row, col);
+      final landed = _engine.giveCard(session.playerId, targetId, row, col);
       _log('$attackerName gave a card to $targetName.');
+      _animate(TableAnimationPayload(moves: [
+        CardMove(
+          from: CardSpot.inHand(session.playerId, row, col),
+          to: CardSpot.inHand(targetId, landed.$1, landed.$2),
+        ),
+      ]));
     } catch (e) {
       _sendError(ws, e.toString());
       return;
@@ -370,7 +475,6 @@ class GameRoom {
   void _onMatchCard(WebSocket ws, Map<String, dynamic> payload) {
     final session = _sessionFor(ws);
     if (session == null) return;
-    final name = _nameOf(session.playerId);
     final row = payload['row'] as int;
     final col = payload['col'] as int;
 
@@ -384,6 +488,38 @@ class GameRoom {
         seenRank != null && seenRank != _engine.state.topDiscard?.rank.name;
     final isEliminated =
         _engine.state.getPlayer(session.playerId)?.isEliminated ?? false;
+
+    // The card has just been taken and this tap was already on its way. It
+    // changes nothing, but it still gets its place in the ranking, behind
+    // everyone already judged so the list never reorders.
+    if (_slapTaken &&
+        !isStaleTap &&
+        !isEliminated &&
+        !_slapAttempts.any((a) => a.playerId == session.playerId)) {
+      _slapAttempts.add(_SlapAttempt(
+        playerId: session.playerId,
+        targetId: targetId,
+        row: row,
+        col: col,
+        tapAtUs: max(_tapTime(payload), _slapAttempts.map((a) => a.tapAtUs).reduce(max)),
+        arrivedAtUs: _clock.elapsedMicroseconds,
+        result: 'late',
+      ));
+      _broadcastSlapRanking();
+      final card = _cardAt(targetId, row, col);
+      if (card != null) {
+        _animate(TableAnimationPayload(slapReveals: [
+          SlapReveal(
+            playerId: session.playerId,
+            targetId: targetId,
+            row: row,
+            col: col,
+            card: card,
+            result: 'late',
+          ),
+        ]));
+      }
+    }
 
     // Window is closed — no penalty
     if (!_matchWindowOpen || isStaleTap || isEliminated) {
@@ -413,22 +549,134 @@ class GameRoom {
       return;
     }
 
-    // Consume this player's one attempt
+    // Consume this player's one attempt, and show straight away that they tried
     _slapAttemptedIds.add(session.playerId);
+    _slapAttempts.add(_SlapAttempt(
+      playerId: session.playerId,
+      targetId: targetId,
+      row: row,
+      col: col,
+      tapAtUs: _tapTime(payload),
+      arrivedAtUs: _clock.elapsedMicroseconds,
+    ));
+    _broadcastState();
+    _broadcastSlapRanking();
+    _slapSettleTimer ??= Timer(_slapSettle, _resolveSlaps);
+  }
 
-    final result = _engine.attemptMatch(session.playerId, targetId, row, col);
+  /// When the player touched the card, on the server's clock. It has to fall
+  /// after the card appeared and before the slap arrived, whatever the device says.
+  int _tapTime(Map<String, dynamic> payload) {
+    final arrivedAtUs = _clock.elapsedMicroseconds;
+    final earliestUs = max(_windowOpenedAtUs, arrivedAtUs - _maxTapAgeUs);
+    final claimedUs = payload['tapAt'] as int? ?? arrivedAtUs;
+    return claimedUs.clamp(earliestUs, arrivedAtUs);
+  }
+
+  void _sortSlapAttempts() {
+    _slapAttempts.sort((a, b) {
+      final byTap = a.tapAtUs.compareTo(b.tapAtUs);
+      return byTap != 0 ? byTap : a.arrivedAtUs.compareTo(b.arrivedAtUs);
+    });
+  }
+
+  /// Judge the waiting slaps, fastest first. The first correct one takes the
+  /// card, and anyone behind it is out of time with no penalty.
+  void _resolveSlaps() {
+    _slapSettleTimer?.cancel();
+    _slapSettleTimer = null;
+    _sortSlapAttempts();
+    final waiting = _slapAttempts.where((a) => a.result == 'pending').toList();
+    if (waiting.isEmpty) return;
+
+    final reveals = <SlapReveal>[];
+    final moves = <CardMove>[];
+    final reshufflesBefore = _engine.reshuffleCount;
+    for (final attempt in waiting) {
+      if (!_matchWindowOpen) {
+        attempt.result = 'late';
+        final card = _cardAt(attempt.targetId, attempt.row, attempt.col);
+        if (card != null) reveals.add(_slapReveal(attempt, card));
+        continue;
+      }
+      try {
+        _applySlap(attempt, reveals, moves);
+      } catch (e) {
+        attempt.result = 'late';
+        print('[Room $code] Slap failed: $e');
+      }
+    }
+    _animate(TableAnimationPayload(
+      moves: moves,
+      slapReveals: reveals,
+      reshuffled: _engine.reshuffleCount != reshufflesBefore,
+    ));
+    if (_matchWindowOpen) _checkAllAttempted();
+
+    _printSlapOrder();
+    _broadcastSlapRanking();
+    _broadcastState();
+    // Elimination may leave only one active player → force round end
+    if (_engine.onlyOneActivePlayerLeft &&
+        _engine.state.phase == GamePhase.playing) {
+      _engine.state.phase = GamePhase.roundEnd;
+      _checkRoundEnd();
+    }
+  }
+
+  SlapReveal _slapReveal(_SlapAttempt attempt, CaboCard card) => SlapReveal(
+        playerId: attempt.playerId,
+        targetId: attempt.targetId,
+        row: attempt.row,
+        col: attempt.col,
+        card: card,
+        result: attempt.result,
+      );
+
+  CaboCard? _cardAt(String playerId, int row, int col) {
+    final hand = _engine.state.getPlayer(playerId)?.hand;
+    if (hand == null || row < 0 || row >= hand.length) return null;
+    if (col < 0 || col >= hand[row].length) return null;
+    return hand[row][col];
+  }
+
+  void _applySlap(
+    _SlapAttempt attempt,
+    List<SlapReveal> reveals,
+    List<CardMove> moves,
+  ) {
+    final playerId = attempt.playerId;
+    final targetId = attempt.targetId;
+    final name = _nameOf(playerId);
+
+    final result = _engine.attemptMatch(playerId, targetId, attempt.row, attempt.col);
+    attempt.result = result.success ? 'right' : 'wrong';
     _broadcast(GameMessage(type: MsgType.matchAttemptResult, payload: result.toJson()));
 
+    if (result.revealedCard != null) {
+      reveals.add(_slapReveal(attempt, result.revealedCard!));
+    }
+    // The penalty card comes out once the wrong card has been shown.
+    final penaltySlot = _engine.lastPenaltySlot;
+    if (!result.success && result.revealedCard != null && penaltySlot != null) {
+      moves.add(CardMove(
+        from: const CardSpot.deckPile(),
+        to: CardSpot.inHand(playerId, penaltySlot.$1, penaltySlot.$2),
+        delayMs: _slapRevealMs,
+      ));
+    }
+
     if (result.success) {
-      // Correct slap — FCFS winner, close window immediately
+      // Correct slap — fastest one wins, close window immediately
       _closeMatchWindow();
+      _slapTaken = true;
       final cardLabel = result.revealedCard != null
           ? _cardLabel(result.revealedCard!.rank.name, result.revealedCard!.suit.name)
           : 'a card';
-      final isOpponentSlap = targetId != session.playerId;
+      final isOpponentSlap = targetId != playerId;
       if (isOpponentSlap) {
         final targetName = _nameOf(targetId);
-        _pendingGiveCardAttackerId = session.playerId;
+        _pendingGiveCardAttackerId = playerId;
         _pendingGiveCardTargetId = targetId;
         _log('⚡ $name slapped $cardLabel from $targetName — correct! Now give one of your cards to $targetName.');
       } else {
@@ -436,20 +684,19 @@ class GameRoom {
       }
     } else if (result.revealedCard == null) {
       _log('$name tried to slap an empty slot — no penalty.');
-      _checkAllAttempted();
     } else {
       final cardLabel = _cardLabel(
           result.revealedCard!.rank.name, result.revealedCard!.suit.name);
-      final owner = targetId == session.playerId
+      final owner = targetId == playerId
           ? 'their own'
           : "${_nameOf(targetId)}'s";
       // Check if the wrong slap triggered elimination (too many penalty cards)
       final eliminated =
-          _engine.state.getPlayer(session.playerId)?.isEliminated ?? false;
+          _engine.state.getPlayer(playerId)?.isEliminated ?? false;
       if (eliminated) {
         _log('❌ $name slapped $owner $cardLabel — WRONG! Too many penalties — $name is ELIMINATED! 💀');
         // If it was their turn, advance to next active player
-        if (_engine.state.currentPlayerId == session.playerId) {
+        if (_engine.state.currentPlayerId == playerId) {
           // They may have been holding a drawn card. Keep it in the game, under
           // the top discard so it doesn't change what can be slapped.
           final drawn = _engine.state.drawnCard;
@@ -458,22 +705,55 @@ class GameRoom {
             _engine.state.drawnCard = null;
           }
           _engine.state.currentPlayerId =
-              _engine.state.getNextPlayerId(session.playerId);
+              _engine.state.getNextPlayerId(playerId);
           _engine.state.turnPhase = TurnPhase.waitingForDraw;
         }
-        _checkAllAttempted();
       } else {
         _log('❌ $name slapped $owner $cardLabel — WRONG! Penalty card added.');
-        _checkAllAttempted();
       }
     }
-    _broadcastState();
-    // Elimination may leave only one active player → force round end
-    if (_engine.onlyOneActivePlayerLeft &&
-        _engine.state.phase == GamePhase.playing) {
-      _engine.state.phase = GamePhase.roundEnd;
-      _checkRoundEnd();
-    }
+  }
+
+  void _animate(TableAnimationPayload animation) {
+    _broadcast(GameMessage(
+      type: MsgType.tableAnimation,
+      payload: animation.toJson(),
+    ));
+  }
+
+  void _broadcastSlapRanking() {
+    _sortSlapAttempts();
+    final firstTapUs = _slapAttempts.first.tapAtUs;
+    _broadcast(GameMessage(
+      type: MsgType.slapRanking,
+      payload: SlapRankingPayload(
+        cardNo: _slapCardNo,
+        entries: [
+          for (final a in _slapAttempts)
+            SlapRankEntry(
+              playerId: a.playerId,
+              gapMs: ((a.tapAtUs - firstTapUs) / 1000).round(),
+              result: a.result,
+            ),
+        ],
+      ).toJson(),
+    ));
+  }
+
+  void _printSlapOrder() {
+    final firstTapUs = _slapAttempts.first.tapAtUs;
+    final order = [
+      for (final (i, a) in _slapAttempts.indexed)
+        '${i + 1}. ${_nameOf(a.playerId)} +${((a.tapAtUs - firstTapUs) / 1000).toStringAsFixed(1)}ms ${a.result}',
+    ].join(', ');
+    print('[Room $code] Slap order: $order');
+  }
+
+  void _clearSlaps() {
+    _slapSettleTimer?.cancel();
+    _slapSettleTimer = null;
+    _slapAttempts.clear();
+    _slapTaken = false;
   }
 
   // ─── Disconnect ───────────────────────────────────────────────────────────────
@@ -501,6 +781,7 @@ class GameRoom {
       _pendingGiveCardAttackerId = null;
       _pendingGiveCardTargetId = null;
       _clearPeekHold();
+      _clearSlaps();
       print('[Room $code] All players disconnected — reset to lobby.');
       return;
     }
@@ -527,6 +808,7 @@ class GameRoom {
       _closeMatchWindow();
       _pendingGiveCardAttackerId = null;
       _pendingGiveCardTargetId = null;
+      _clearSlaps();
       _engine = GameEngine();
       _actionLog.clear();
       // Everyone has to re-join to sit at the next round. Sockets stay open so
@@ -546,12 +828,17 @@ class GameRoom {
     if (_engine.state.phase != GamePhase.playing) return;
     _matchWindowOpen = true;
     _slapAttemptedIds.clear();
+    _slapAttempts.clear();
+    _slapCardNo++;
+    _slapTaken = false;
+    _windowOpenedAtUs = _clock.elapsedMicroseconds;
     _broadcastState();
   }
 
   void _closeMatchWindow() {
     _matchWindowOpen = false;
     _slapAttemptedIds.clear();
+    _slapTaken = false;
   }
 
   /// After each slap attempt, check if every connected player has had their
@@ -591,6 +878,8 @@ class GameRoom {
         pendingGiveCardTargetId: _pendingGiveCardTargetId,
         peekHoldActorId: _peekHoldActorId,
         peekHoldTargetId: _peekHoldTargetId,
+        peekHoldRow: _peekHoldRow,
+        peekHoldCol: _peekHoldCol,
         // Closed for anyone who has already used their attempt on this card.
         matchWindowOpen:
             _matchWindowOpen && !_slapAttemptedIds.contains(session.playerId),

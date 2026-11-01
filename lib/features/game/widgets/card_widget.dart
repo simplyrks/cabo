@@ -10,6 +10,8 @@ class CardWidget extends StatefulWidget {
   final double width;
   final double height;
   final bool showPeekFlash; // briefly shows card then flips
+  final bool animateFlip; // false shows the face straight away
+  final Duration flipDelay; // waits this long before turning face up
 
   const CardWidget({
     super.key,
@@ -19,6 +21,8 @@ class CardWidget extends StatefulWidget {
     this.width = 70,
     this.height = 100,
     this.showPeekFlash = false,
+    this.animateFlip = true,
+    this.flipDelay = Duration.zero,
   });
 
   @override
@@ -62,7 +66,15 @@ class _CardWidgetState extends State<CardWidget>
         widget.cardState == CardState.peeked;
     if (shouldShowFront && !_showFront) {
       _showFront = true;
-      _ctrl.forward();
+      if (!widget.animateFlip) {
+        _ctrl.value = 1;
+      } else if (widget.flipDelay > Duration.zero) {
+        Future.delayed(widget.flipDelay, () {
+          if (mounted && _showFront) _ctrl.forward();
+        });
+      } else {
+        _ctrl.forward();
+      }
     } else if (!shouldShowFront && _showFront) {
       _showFront = false;
       _ctrl.reverse();

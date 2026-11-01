@@ -10,6 +10,10 @@ class GameEngine {
 
   final GameState state;
   final Random _rng;
+  /// How many times the discard pile has been shuffled into a new deck.
+  int reshuffleCount = 0;
+  /// Where the latest penalty card landed, if one was dealt.
+  (int, int)? lastPenaltySlot;
 
   GameEngine({Random? random})
       : state = GameState(),
@@ -329,6 +333,7 @@ class GameEngine {
     final target = state.getPlayer(targetId);
     if (target == null) throw Exception('Player not found');
 
+    lastPenaltySlot = null;
     final card = target.hand[row][col];
     if (card == null) {
       return MatchAttemptResultPayload(
@@ -363,6 +368,7 @@ class GameEngine {
   /// Deals one penalty card to the player.
   /// Returns true if the player was eliminated (already at 8-card maximum).
   bool _dealPenaltyCard(String playerId) {
+    lastPenaltySlot = null;
     final player = state.getPlayer(playerId)!;
 
     // Count filled slots across all rows
@@ -387,6 +393,7 @@ class GameEngine {
       for (int c = 0; c < player.hand[r].length; c++) {
         if (player.hand[r][c] == null) {
           player.setCard(r, c, penalty);
+          lastPenaltySlot = (r, c);
           return false;
         }
       }
@@ -394,6 +401,7 @@ class GameEngine {
 
     // Every existing slot is occupied — add a new overflow row.
     player.hand.add([penalty, null]);
+    lastPenaltySlot = (player.hand.length - 1, 0);
     return false;
   }
 
@@ -492,6 +500,7 @@ class GameEngine {
 
   void _reshuffleDiscard() {
     if (state.discardPile.length <= 1) return;
+    reshuffleCount++;
     final top = state.discardPile.removeLast();
     _shuffle(state.discardPile);
     state.drawPile.addAll(state.discardPile);
@@ -518,7 +527,8 @@ class GameEngine {
 
   /// Move one card from attacker's hand slot to the target's hand.
   /// Fills an existing empty slot in the target's hand before adding a new row.
-  void giveCard(String attackerId, String targetId, int row, int col) {
+  /// Returns where the card landed.
+  (int, int) giveCard(String attackerId, String targetId, int row, int col) {
     final attacker = state.getPlayer(attackerId)!;
     final target = state.getPlayer(targetId)!;
     final card = attacker.hand[row][col];
@@ -529,12 +539,13 @@ class GameEngine {
       for (int c = 0; c < target.hand[r].length; c++) {
         if (target.hand[r][c] == null) {
           target.setCard(r, c, card);
-          return;
+          return (r, c);
         }
       }
     }
     // No empty slot — add overflow row
     target.hand.add([card, null]);
+    return (target.hand.length - 1, 0);
   }
 
   /// Build personalised GameStatePayload for one player.
@@ -546,6 +557,8 @@ class GameEngine {
     String? pendingGiveCardTargetId,
     String? peekHoldActorId,
     String? peekHoldTargetId,
+    int? peekHoldRow,
+    int? peekHoldCol,
   }) {
     // At round end reveal ALL cards to everyone
     final revealAll = state.phase == GamePhase.roundEnd;
@@ -572,6 +585,8 @@ class GameEngine {
       pendingGiveCardTargetId: pendingGiveCardTargetId,
       peekHoldActorId: peekHoldActorId,
       peekHoldTargetId: peekHoldTargetId,
+      peekHoldRow: peekHoldRow,
+      peekHoldCol: peekHoldCol,
     );
   }
 }

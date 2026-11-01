@@ -7,8 +7,10 @@ import 'package:cabo_shared/models/messages.dart';
 import 'widgets/card_widget.dart';
 import 'widgets/player_hand.dart';
 import 'widgets/card_pick_overlay.dart';
+import 'widgets/slap_ranking.dart';
 import 'widgets/slap_status.dart';
 import 'widgets/status_box.dart' show StatusBox, HistorySheet;
+import 'widgets/table_animations.dart';
 
 // ─── Power selection state ────────────────────────────────────────────────────
 
@@ -169,6 +171,9 @@ class _InitialPeekScreenState extends ConsumerState<_InitialPeekScreen> {
                   playerJson: myData,
                   isLocalPlayer: true,
                   peekedCardData: bottomCards,
+                  dealIn: true,
+                  flipStart: const Duration(milliseconds: 650),
+                  flipStagger: const Duration(milliseconds: 80),
                 ),
                 const SizedBox(height: 32),
                 // ── Who's ready? ──
@@ -281,6 +286,25 @@ class _PlayingScreenState extends ConsumerState<_PlayingScreen> {
   /// When the server last confirmed the end of my move
   DateTime? _myMoveEndedAt;
   static const _repeatTapGuard = Duration(milliseconds: 800);
+  /// When a finger last touched the screen, on this device's clock
+  int _lastTouchUs = 0;
+  /// Who tried to slap the current card, and when each one first appeared here
+  SlapRankingPayload? _slapRanking;
+  final Map<String, DateTime> _slapRowShownAt = {};
+  static const _slapRowTime = Duration(seconds: 4);
+  // Table animations
+  final _deckKey = GlobalKey();
+  final _discardKey = GlobalKey();
+  final _drawnCardKey = GlobalKey();
+  final Map<String, GlobalKey> _handKeys = {};
+  final List<Widget> _tableAnimations = [];
+  int _nextAnimationId = 0;
+  /// 'playerId:row:col' → how many moving cards are using that slot right now
+  final Map<String, int> _slotsInMotion = {};
+  int _flightsToDiscard = 0;
+  /// The discard shown until a card flying to the pile lands on it
+  Map<String, dynamic>? _discardUnderFlight;
+  int _flightsToMyDrawnCard = 0;
   /// The Queen/King pick being shown to everyone right now
   CardsPickedPayload? _activePick;
   final _tableKey = GlobalKey();
@@ -299,6 +323,231 @@ class _PlayingScreenState extends ConsumerState<_PlayingScreen> {
 
   String _playerName(String id) =>
       gs.playerById(id)?['name'] as String? ?? 'Someone';
+
+  GlobalKey _handKey(String playerId) =>
+      _handKeys.putIfAbsent(playerId, GlobalKey.new);
+
+  Rect? _keyRect(GlobalKey key) {
+    final box = key.currentContext?.findRenderObject();
+    final table = _tableKey.currentContext?.findRenderObject();
+    if (box is! RenderBox || table is! RenderBox || !box.hasSize) return null;
+    return box.localToGlobal(Offset.zero, ancestor: table) & box.size;
+  }
+
+  /// A card-sized space in the middle of a player's hand.
+  Rect? _handRect(String playerId) {
+    final hand = _keyRect(_handKey(playerId));
+    if (hand == null) return null;
+    final size = playerId == myId ? const Size(64, 92) : const Size(46, 66);
+    return Rect.fromCenter(center: hand.center, width: size.width, height: size.height);
+  }
+
+  /// Where a place on the table is on this screen right now. Your own drawn
+  /// card sits in its panel; anyone else's is held at their hand.
+  Rect? _spotRect(CardSpot spot) {
+    switch (spot.kind) {
+      case CardSpot.deck:
+        return _keyRect(_deckKey);
+      case CardSpot.discard:
+        return _keyRect(_discardKey);
+      case CardSpot.held:
+        if (spot.playerId == myId) {
+          return _keyRect(_drawnCardKey) ?? _handRect(myId);
+        }
+        return _handRect(spot.playerId!);
+      default:
+        return _slotRect(spot.playerId!, spot.row!, spot.col!);
+    }
+  }
+
+  String _slotName(String playerId, int row, int col) => '$playerId:$row:$col';
+
+  void _holdSlot(String name) =>
+      _slotsInMotion[name] = (_slotsInMotion[name] ?? 0) + 1;
+
+  void _releaseSlot(String name) {
+    final left = (_slotsInMotion[name] ?? 1) - 1;
+    if (left <= 0) {
+      _slotsInMotion.remove(name);
+    } else {
+      _slotsInMotion[name] = left;
+    }
+  }
+
+  Set<(int, int)> _hiddenSlotsOf(String playerId) => {
+        for (final name in _slotsInMotion.keys)
+          if (name.startsWith('$playerId:'))
+            () {
+              final parts = name.split(':');
+              return (int.parse(parts[parts.length - 2]), int.parse(parts.last));
+            }(),
+      };
+
+  /// What the discard pile shows: a card still in the air hasn't landed yet.
+  Map<String, dynamic>? get _shownDiscard =>
+      _flightsToDiscard > 0 ? _discardUnderFlight : gs.topDiscard;
+
+  /// Runs before the game state that this animation leads to, so every card is
+  /// still where it started and each flight can take its starting point now.
+  void _playTableAnimation(TableAnimationPayload animation) {
+    setState(() {
+      for (final move in animation.moves) {
+        _addFlight(move);
+      }
+      if (animation.slapReveals.isNotEmpty) {
+        for (final reveal in animation.slapReveals) {
+          _addSlapReveal(reveal);
+        }
+      }
+      if (animation.skippedPlayerId != null) _addSkippedBadge(animation.skippedPlayerId!);
+      if (animation.reshuffled) _addReshuffle();
+    });
+  }
+
+  void _addAnimation(Widget Function(Key key, void Function() remove) build) {
+    final key = ValueKey(_nextAnimationId++);
+    late final Widget widget;
+    widget = build(key, () {
+      if (mounted) setState(() => _tableAnimations.remove(widget));
+    });
+    _tableAnimations.add(widget);
+  }
+
+  void _addFlight(CardMove move) {
+    final from = _spotRect(move.from);
+    final landing = <VoidCallback>[];
+
+    for (final spot in [move.from, move.to]) {
+      if (spot.kind == CardSpot.slot) {
+        final name = _slotName(spot.playerId!, spot.row!, spot.col!);
+        _holdSlot(name);
+        landing.add(() => _releaseSlot(name));
+      }
+    }
+    if (move.to.kind == CardSpot.discard) {
+      if (_flightsToDiscard == 0) _discardUnderFlight = gs.topDiscard;
+      _flightsToDiscard++;
+      landing.add(() => _flightsToDiscard--);
+    }
+    if (move.to.kind == CardSpot.held && move.to.playerId == myId) {
+      _flightsToMyDrawnCard++;
+      landing.add(() => _flightsToMyDrawnCard--);
+    }
+
+    // Started off-screen somehow: skip the flight but keep the game correct.
+    if (from == null) {
+      for (final undo in landing) {
+        undo();
+      }
+      return;
+    }
+    _addAnimation((key, remove) => FlyingCard(
+          key: key,
+          from: from,
+          to: () => _spotRect(move.to),
+          card: move.card?.toJson(),
+          delay: Duration(milliseconds: move.delayMs),
+          onLanded: () {
+            for (final done in landing) {
+              done();
+            }
+            remove();
+          },
+        ));
+  }
+
+  /// A spot above your own hand, side by side when several cards are up.
+  Rect _revealSpot(int index) {
+    const size = Size(56, 80);
+    const gap = 8.0;
+    final table = _keyRect(_tableKey) ?? Rect.zero;
+    final hand = _keyRect(_handKey(myId));
+    final top = (hand?.top ?? table.center.dy + 40) - size.height - 26;
+    final count = _revealCount;
+    final centerX = table.width / 2 +
+        (index - (count - 1) / 2) * (size.width + gap);
+    return Rect.fromLTWH(centerX - size.width / 2, top, size.width, size.height);
+  }
+
+  int _revealCount = 0;
+  int _revealsFinished = 0;
+
+  void _addSlapReveal(SlapReveal reveal) {
+    final from = _slotRect(reveal.targetId, reveal.row, reveal.col) ??
+        _handRect(reveal.targetId);
+    if (from == null) return;
+    final slot = _slotName(reveal.targetId, reveal.row, reveal.col);
+    _holdSlot(slot);
+    final isRight = reveal.result == 'right';
+    // Spots fill left to right, and start over once the cards up front are gone.
+    if (_revealCount == _revealsFinished) {
+      _revealCount = 0;
+      _revealsFinished = 0;
+    }
+    final index = _revealCount++;
+
+    _addAnimation((key, remove) => SlapRevealCard(
+          key: key,
+          from: from,
+          spot: () => _revealSpot(index),
+          goesTo: () => isRight
+              ? _keyRect(_discardKey)
+              : _slotRect(reveal.targetId, reveal.row, reveal.col),
+          card: reveal.card.toJson(),
+          result: reveal.result,
+          name: reveal.playerId == myId ? 'You' : _playerName(reveal.playerId),
+          onDone: () {
+            _releaseSlot(slot);
+            _revealsFinished++;
+            remove();
+          },
+        ));
+  }
+
+  void _addSkippedBadge(String playerId) {
+    _addAnimation((key, remove) => SkippedBadge(
+          key: key,
+          hand: () => _keyRect(_handKey(playerId)),
+          onDone: remove,
+        ));
+  }
+
+  /// The discard pile sweeping back into the deck.
+  void _addReshuffle() {
+    final from = _keyRect(_discardKey);
+    if (from == null) return;
+    for (var i = 0; i < 6; i++) {
+      _addAnimation((key, remove) => FlyingCard(
+            key: key,
+            from: from,
+            to: () => _keyRect(_deckKey),
+            delay: Duration(milliseconds: 70 * i),
+            onLanded: remove,
+          ));
+    }
+    _triggerSwapFlash('Discard pile shuffled into a new deck');
+  }
+
+  /// The ranking rows that haven't reached their 4 seconds yet.
+  List<SlapRankRow> _visibleSlapRows() {
+    final entries = _slapRanking?.entries ?? const <SlapRankEntry>[];
+    final now = DateTime.now();
+    return [
+      for (var i = 0; i < entries.length; i++)
+        if (now.difference(_slapRowShownAt[entries[i].playerId] ?? now) < _slapRowTime)
+          SlapRankRow(
+            rank: i + 1,
+            name: entries[i].playerId == myId ? 'You' : _playerName(entries[i].playerId),
+            gapMs: entries[i].gapMs,
+            result: entries[i].result,
+          ),
+    ];
+  }
+
+  void _sendSlap(String targetId, int row, int col) {
+    ref.read(gameClientProvider).matchCard(
+          targetId, row, col, _shownDiscard?['rank'] as String?, _lastTouchUs);
+  }
 
   String _peekHoldMessage(String actorId, String targetId) {
     final String looking;
@@ -342,6 +591,26 @@ class _PlayingScreenState extends ConsumerState<_PlayingScreen> {
         if (isSmartSwapPeek) _smartSwapPeekedCard = cardJson;
       });
       // A 7/8/9/10 peek is covered again when the server ends the hold
+    });
+
+    // Card movements announced by the server, played the same on every screen
+    ref.listenManual(tableAnimationProvider, (_, animation) {
+      if (animation != null) _playTableAnimation(animation);
+    });
+
+    // Slap ranking: each row shows for 4 seconds, and a new card starts a new list
+    ref.listenManual(slapRankingProvider, (_, ranking) {
+      if (ranking == null) return;
+      setState(() {
+        if (ranking.cardNo != _slapRanking?.cardNo) _slapRowShownAt.clear();
+        _slapRanking = ranking;
+        for (final entry in ranking.entries) {
+          _slapRowShownAt.putIfAbsent(entry.playerId, DateTime.now);
+        }
+      });
+      Future.delayed(_slapRowTime, () {
+        if (mounted) setState(() {});
+      });
     });
 
     // Queen/King: show everyone which positions were picked
@@ -439,10 +708,15 @@ class _PlayingScreenState extends ConsumerState<_PlayingScreen> {
   @override
   Widget build(BuildContext context) {
     final powerSel = ref.watch(_powerStateProvider);
+    final slapRows = _visibleSlapRows();
 
     return Scaffold(
       body: SafeArea(
-        child: Stack(
+        child: Listener(
+          // The moment of touch decides slap order, not the moment of lifting
+          onPointerDown: (_) =>
+              _lastTouchUs = ref.read(gameClientProvider).clock.localNowUs,
+          child: Stack(
           key: _tableKey,
           children: [
             Column(
@@ -463,10 +737,45 @@ class _PlayingScreenState extends ConsumerState<_PlayingScreen> {
                   alignment: const Alignment(1, 0.2), // below the power instructions
                   child: Padding(
                     padding: const EdgeInsets.only(right: 12),
-                    child: SlapStatus(
-                      isActive: gs.matchWindowOpen && !_iAmEliminated,
+                    child: Stack(
+                      clipBehavior: Clip.none,
+                      children: [
+                        SlapStatus(
+                          isActive: gs.matchWindowOpen && !_iAmEliminated,
+                        ),
+                        // Above the badge, without moving it
+                        if (slapRows.isNotEmpty)
+                          Positioned(
+                            right: 0,
+                            bottom: 78,
+                            child: SlapRanking(
+                              triedCount: _slapRanking!.entries.length,
+                              rows: slapRows,
+                            ),
+                          ),
+                      ],
                     ),
                   ),
+                ),
+              ),
+            ),
+            // Card movements — play over the table without holding up the game
+            Positioned.fill(
+              child: IgnorePointer(
+                child: Stack(
+                  children: [
+                    if (gs.peekHoldTargetId != null &&
+                        gs.peekHoldRow != null &&
+                        gs.peekHoldCol != null)
+                      SlotPulse(
+                        slot: () => _slotRect(
+                          gs.peekHoldTargetId!,
+                          gs.peekHoldRow!,
+                          gs.peekHoldCol!,
+                        ),
+                      ),
+                    ..._tableAnimations,
+                  ],
                 ),
               ),
             ),
@@ -568,6 +877,7 @@ class _PlayingScreenState extends ConsumerState<_PlayingScreen> {
                 ),
               ),
           ],
+          ),
         ),
       ),
     );
@@ -652,14 +962,18 @@ class _PlayingScreenState extends ConsumerState<_PlayingScreen> {
             ),
           Padding(
             padding: const EdgeInsets.only(bottom: 8),
-            child: PlayerHand(
-              playerJson: myData,
-              isLocalPlayer: true,
-              isCurrentTurn: isMyTurn && !_iAmEliminated,
-              peekedCardData: _peekedCards[myId] ?? {},
-              highlightedSlots: myHighlighted,
-              slotKey: (row, col) => _slotKey(myId, row, col),
-              onCardTap: _iAmEliminated ? null : _onMyCardTap(powerSel),
+            child: KeyedSubtree(
+              key: _handKey(myId),
+              child: PlayerHand(
+                playerJson: myData,
+                isLocalPlayer: true,
+                isCurrentTurn: isMyTurn && !_iAmEliminated,
+                peekedCardData: _peekedCards[myId] ?? {},
+                highlightedSlots: myHighlighted,
+                slotKey: (row, col) => _slotKey(myId, row, col),
+                hiddenSlots: _hiddenSlotsOf(myId),
+                onCardTap: _iAmEliminated ? null : _onMyCardTap(powerSel),
+              ),
             ),
           ),
         ],
@@ -821,16 +1135,20 @@ class _PlayingScreenState extends ConsumerState<_PlayingScreen> {
             ? AppColors.highlight.withValues(alpha: 0.05)
             : null,
       ),
-      child: PlayerHand(
-        playerJson: opp,
-        isLocalPlayer: false,
-        isCurrentTurn: isTheirTurn,
-        peekedCardData: _peekedCards[oid] ?? {},
-        highlightedSlots: theirHighlighted,
-        slotKey: (row, col) => _slotKey(oid, row, col),
-        onCardTap: _canTapOpponentCard(powerSel, oid)
-            ? (row, col) => _onOpponentCardTap(oid, row, col, powerSel)
-            : null,
+      child: KeyedSubtree(
+        key: _handKey(oid),
+        child: PlayerHand(
+          playerJson: opp,
+          isLocalPlayer: false,
+          isCurrentTurn: isTheirTurn,
+          peekedCardData: _peekedCards[oid] ?? {},
+          highlightedSlots: theirHighlighted,
+          slotKey: (row, col) => _slotKey(oid, row, col),
+          hiddenSlots: _hiddenSlotsOf(oid),
+          onCardTap: _canTapOpponentCard(powerSel, oid)
+              ? (row, col) => _onOpponentCardTap(oid, row, col, powerSel)
+              : null,
+        ),
       ),
     );
   }
@@ -843,6 +1161,7 @@ class _PlayingScreenState extends ConsumerState<_PlayingScreen> {
       child: Column(
         children: [
           Stack(
+            key: _deckKey,
             children: [
               for (int i = 0; i < 3 && i < gs.drawPileCount; i++)
                 Positioned(
@@ -886,11 +1205,15 @@ class _PlayingScreenState extends ConsumerState<_PlayingScreen> {
         Stack(
           clipBehavior: Clip.none,
           children: [
-            CardWidget(
-              cardJson: gs.topDiscard,
-              cardState: gs.topDiscard != null ? CardState.faceUp : CardState.empty,
-              width: 52,
-              height: 74,
+            KeyedSubtree(
+              key: _discardKey,
+              child: CardWidget(
+                cardJson: _shownDiscard,
+                cardState: _shownDiscard != null ? CardState.faceUp : CardState.empty,
+                animateFlip: false,
+                width: 52,
+                height: 74,
+              ),
             ),
             // Status dot — top-right corner of discard card
             if (canSlap || _slapTaken)
@@ -957,11 +1280,17 @@ class _PlayingScreenState extends ConsumerState<_PlayingScreen> {
           mainAxisAlignment: MainAxisAlignment.center,
           mainAxisSize: MainAxisSize.min,
           children: [
-            CardWidget(
-              cardJson: gs.drawnCard,
-              cardState: CardState.faceUp,
-              width: 52,
-              height: 74,
+            KeyedSubtree(
+              key: _drawnCardKey,
+              child: Opacity(
+                opacity: _flightsToMyDrawnCard > 0 ? 0 : 1,
+                child: CardWidget(
+                  cardJson: gs.drawnCard,
+                  cardState: CardState.faceUp,
+                  width: 52,
+                  height: 74,
+                ),
+              ),
             ),
             const SizedBox(width: 12),
             if (gs.turnPhase == 'cardDrawn') ...[
@@ -1222,8 +1551,7 @@ class _PlayingScreenState extends ConsumerState<_PlayingScreen> {
     if (gs.matchWindowOpen && powerSel.step == PowerStep.none) {
       return (row, col) {
         if (_isRepeatTapAfterMyMove) return;
-        ref.read(gameClientProvider).matchCard(
-              myId, row, col, gs.topDiscard?['rank'] as String?);
+        _sendSlap(myId, row, col);
       };
     }
     return null;
@@ -1269,7 +1597,7 @@ class _PlayingScreenState extends ConsumerState<_PlayingScreen> {
     final client = ref.read(gameClientProvider);
     // Match window: slap an opponent's card
     if (gs.matchWindowOpen && powerSel.step == PowerStep.none) {
-      client.matchCard(oid, row, col, gs.topDiscard?['rank'] as String?);
+      _sendSlap(oid, row, col);
       return;
     }
     switch (powerSel.step) {
@@ -1361,9 +1689,15 @@ class _RoundEndScreen extends ConsumerWidget {
     final iWon = localPlayer.id == winner.playerId;
     final scoreMap = {for (final s in roundEnd.scores) s.playerId: s};
 
+    final caller = gameState.caboCallerId == null
+        ? null
+        : gameState.playerById(gameState.caboCallerId!);
+
     return Scaffold(
       body: SafeArea(
-        child: Column(
+        child: Stack(
+          children: [
+            Column(
           children: [
             // ── Winner banner ──
             Container(
@@ -1412,6 +1746,11 @@ class _RoundEndScreen extends ConsumerWidget {
                       isLocalPlayer: pid == localPlayer.id,
                       score: score,
                       allCards: allCards,
+                      // One player's cards after another, once CABO! has shown
+                      flipStart: Duration(
+                        milliseconds: (caller != null ? 1100 : 200) +
+                            500 * gameState.players.indexOf(pData),
+                      ),
                     );
                   }).toList(),
                 ),
@@ -1447,6 +1786,12 @@ class _RoundEndScreen extends ConsumerWidget {
               ),
             ),
           ],
+            ),
+            if (caller != null)
+              Positioned.fill(
+                child: CaboSplash(name: 'called by ${caller['name']}'),
+              ),
+          ],
         ),
       ),
     );
@@ -1458,12 +1803,14 @@ class _PlayerRevealCard extends StatelessWidget {
   final bool isLocalPlayer;
   final PlayerScore? score;
   final Map<(int, int), Map<String, dynamic>> allCards;
+  final Duration flipStart;
 
   const _PlayerRevealCard({
     required this.playerJson,
     required this.isLocalPlayer,
     required this.score,
     required this.allCards,
+    required this.flipStart,
   });
 
   @override
@@ -1489,6 +1836,8 @@ class _PlayerRevealCard extends StatelessWidget {
             playerJson: playerJson,
             isLocalPlayer: isLocalPlayer,
             peekedCardData: allCards,
+            flipStart: flipStart,
+            flipStagger: const Duration(milliseconds: 90),
           ),
           const SizedBox(height: 10),
           if (score != null) ...[

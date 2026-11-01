@@ -107,6 +107,8 @@ class GameStateModel {
   final String? pendingGiveCardTargetId;
   final String? peekHoldActorId;
   final String? peekHoldTargetId;
+  final int? peekHoldRow;
+  final int? peekHoldCol;
 
   const GameStateModel({
     required this.phase,
@@ -126,6 +128,8 @@ class GameStateModel {
     this.pendingGiveCardTargetId,
     this.peekHoldActorId,
     this.peekHoldTargetId,
+    this.peekHoldRow,
+    this.peekHoldCol,
   });
 
   factory GameStateModel.fromPayload(GameStatePayload p) => GameStateModel(
@@ -146,6 +150,8 @@ class GameStateModel {
         pendingGiveCardTargetId: p.pendingGiveCardTargetId,
         peekHoldActorId: p.peekHoldActorId,
         peekHoldTargetId: p.peekHoldTargetId,
+        peekHoldRow: p.peekHoldRow,
+        peekHoldCol: p.peekHoldCol,
       );
 
   Map<String, dynamic>? playerById(String id) {
@@ -177,6 +183,16 @@ final peekRevealProvider = StateProvider<PeekRevealPayload?>((_) => null);
 /// The last card positions picked with a Queen or King, shown to everyone.
 final cardsPickedProvider = StateProvider<CardsPickedPayload?>((_) => null);
 
+// ─── Slap ranking ─────────────────────────────────────────────────────────────
+
+/// Who has tried to slap the current card, fastest first.
+final slapRankingProvider = StateProvider<SlapRankingPayload?>((_) => null);
+
+// ─── Table animations ─────────────────────────────────────────────────────────
+
+/// The latest card movements for this screen to play.
+final tableAnimationProvider = StateProvider<TableAnimationPayload?>((_) => null);
+
 // ─── Round end scores ─────────────────────────────────────────────────────────
 
 final roundEndProvider = StateProvider<RoundEndPayload?>((_) => null);
@@ -194,6 +210,8 @@ void resetGameSession(WidgetRef ref) {
   ref.read(localPlayerProvider.notifier).state = null;
   ref.read(peekRevealProvider.notifier).state = null;
   ref.read(cardsPickedProvider.notifier).state = null;
+  ref.read(slapRankingProvider.notifier).state = null;
+  ref.read(tableAnimationProvider.notifier).state = null;
 }
 
 // ─── Message listener ─────────────────────────────────────────────────────────
@@ -228,6 +246,7 @@ class MessageRouter {
             LocalPlayer(id: id, name: name);
         _ref.read(roomCodeProvider.notifier).state =
             msg.payload['roomCode'] as String?;
+        _ref.read(gameClientProvider).startClockSync();
 
       case MsgType.lobbyState:
         final p = LobbyStatePayload(
@@ -255,6 +274,14 @@ class MessageRouter {
       case MsgType.cardsPicked:
         _ref.read(cardsPickedProvider.notifier).state =
             CardsPickedPayload.fromJson(msg.payload);
+
+      case MsgType.slapRanking:
+        _ref.read(slapRankingProvider.notifier).state =
+            SlapRankingPayload.fromJson(msg.payload);
+
+      case MsgType.tableAnimation:
+        _ref.read(tableAnimationProvider.notifier).state =
+            TableAnimationPayload.fromJson(msg.payload);
 
       case MsgType.roundEnd:
         final p = RoundEndPayload.fromJson(msg.payload);

@@ -21,12 +21,16 @@ class MsgType {
   static const giveCard = 'giveCard';   // after successful opponent slap
   static const peekResult = 'peekResult'; // client acks a peek
   static const initialPeekDone = 'initialPeekDone';
+  static const clockPing = 'clockPing'; // measures the gap to the server clock
 
   // Server → Client
   static const lobbyState = 'lobbyState';
   static const gameStateUpdate = 'gameStateUpdate';
   static const peekReveal = 'peekReveal'; // server reveals a card to ONE player
   static const cardsPicked = 'cardsPicked'; // Queen/King: card positions, to everyone
+  static const clockPong = 'clockPong'; // answer to clockPing
+  static const slapRanking = 'slapRanking'; // who tried to slap this card, in order
+  static const tableAnimation = 'tableAnimation'; // card movements for every screen to play
   static const matchAttemptResult = 'matchAttemptResult';
   static const error = 'error';
   static const roundEnd = 'roundEnd';
@@ -98,6 +102,9 @@ class GameStatePayload {
   final String? peekHoldActorId;
   /// The player whose card is being looked at, which may be the actor.
   final String? peekHoldTargetId;
+  /// Which card position is being looked at. Never the card itself.
+  final int? peekHoldRow;
+  final int? peekHoldCol;
 
   const GameStatePayload({
     required this.phase,
@@ -117,6 +124,8 @@ class GameStatePayload {
     this.pendingGiveCardTargetId,
     this.peekHoldActorId,
     this.peekHoldTargetId,
+    this.peekHoldRow,
+    this.peekHoldCol,
   });
 
   Map<String, dynamic> toJson() => {
@@ -137,6 +146,8 @@ class GameStatePayload {
         'pendingGiveCardTargetId': pendingGiveCardTargetId,
         'peekHoldActorId': peekHoldActorId,
         'peekHoldTargetId': peekHoldTargetId,
+        'peekHoldRow': peekHoldRow,
+        'peekHoldCol': peekHoldCol,
       };
 
   factory GameStatePayload.fromJson(Map<String, dynamic> json) {
@@ -172,6 +183,8 @@ class GameStatePayload {
       pendingGiveCardTargetId: json['pendingGiveCardTargetId'] as String?,
       peekHoldActorId: json['peekHoldActorId'] as String?,
       peekHoldTargetId: json['peekHoldTargetId'] as String?,
+      peekHoldRow: json['peekHoldRow'] as int?,
+      peekHoldCol: json['peekHoldCol'] as int?,
     );
   }
 }
@@ -215,6 +228,204 @@ class PeekRevealPayload {
 
 /// Which card positions a Queen or King picked. Sent to everyone, and on purpose
 /// says nothing about the cards themselves or whether a swap actually happened.
+/// A place on the table a card can move from or to.
+class CardSpot {
+  static const deck = 'deck';
+  static const discard = 'discard';
+  static const held = 'held'; // the card a player has drawn
+  static const slot = 'slot';
+
+  final String kind;
+  final String? playerId;
+  final int? row;
+  final int? col;
+
+  const CardSpot.deckPile()
+      : kind = deck,
+        playerId = null,
+        row = null,
+        col = null;
+  const CardSpot.discardPile()
+      : kind = discard,
+        playerId = null,
+        row = null,
+        col = null;
+  const CardSpot.heldBy(String this.playerId)
+      : kind = held,
+        row = null,
+        col = null;
+  const CardSpot.inHand(String this.playerId, int this.row, int this.col)
+      : kind = slot;
+  const CardSpot._(this.kind, this.playerId, this.row, this.col);
+
+  Map<String, dynamic> toJson() => {
+        'kind': kind,
+        'playerId': playerId,
+        'row': row,
+        'col': col,
+      };
+
+  factory CardSpot.fromJson(Map<String, dynamic> json) => CardSpot._(
+        json['kind'] as String,
+        json['playerId'] as String?,
+        json['row'] as int?,
+        json['col'] as int?,
+      );
+}
+
+/// One card travelling across the table.
+class CardMove {
+  final CardSpot from;
+  final CardSpot to;
+  /// The card's face, only when everyone may see it. Null travels face down.
+  final CaboCard? card;
+  final int delayMs;
+
+  const CardMove({
+    required this.from,
+    required this.to,
+    this.card,
+    this.delayMs = 0,
+  });
+
+  Map<String, dynamic> toJson() => {
+        'from': from.toJson(),
+        'to': to.toJson(),
+        'card': card?.toJson(),
+        'delayMs': delayMs,
+      };
+
+  factory CardMove.fromJson(Map<String, dynamic> json) => CardMove(
+        from: CardSpot.fromJson(json['from'] as Map<String, dynamic>),
+        to: CardSpot.fromJson(json['to'] as Map<String, dynamic>),
+        card: json['card'] != null
+            ? CaboCard.fromJson(json['card'] as Map<String, dynamic>)
+            : null,
+        delayMs: json['delayMs'] as int? ?? 0,
+      );
+}
+
+/// A slapped card, shown face up to everyone whatever the result.
+class SlapReveal {
+  final String playerId;
+  final String targetId;
+  final int row;
+  final int col;
+  final CaboCard card;
+  /// 'right', 'wrong', or 'late'.
+  final String result;
+
+  const SlapReveal({
+    required this.playerId,
+    required this.targetId,
+    required this.row,
+    required this.col,
+    required this.card,
+    required this.result,
+  });
+
+  Map<String, dynamic> toJson() => {
+        'playerId': playerId,
+        'targetId': targetId,
+        'row': row,
+        'col': col,
+        'card': card.toJson(),
+        'result': result,
+      };
+
+  factory SlapReveal.fromJson(Map<String, dynamic> json) => SlapReveal(
+        playerId: json['playerId'] as String,
+        targetId: json['targetId'] as String,
+        row: json['row'] as int,
+        col: json['col'] as int,
+        card: CaboCard.fromJson(json['card'] as Map<String, dynamic>),
+        result: json['result'] as String,
+      );
+}
+
+/// What every screen should play. Sent just before the game state it leads to,
+/// so each screen still knows where the cards were.
+class TableAnimationPayload {
+  final List<CardMove> moves;
+  final List<SlapReveal> slapReveals;
+  final String? skippedPlayerId;
+  final bool reshuffled;
+
+  const TableAnimationPayload({
+    this.moves = const [],
+    this.slapReveals = const [],
+    this.skippedPlayerId,
+    this.reshuffled = false,
+  });
+
+  Map<String, dynamic> toJson() => {
+        'moves': moves.map((m) => m.toJson()).toList(),
+        'slapReveals': slapReveals.map((r) => r.toJson()).toList(),
+        'skippedPlayerId': skippedPlayerId,
+        'reshuffled': reshuffled,
+      };
+
+  factory TableAnimationPayload.fromJson(Map<String, dynamic> json) =>
+      TableAnimationPayload(
+        moves: (json['moves'] as List<dynamic>)
+            .map((m) => CardMove.fromJson(m as Map<String, dynamic>))
+            .toList(),
+        slapReveals: (json['slapReveals'] as List<dynamic>)
+            .map((r) => SlapReveal.fromJson(r as Map<String, dynamic>))
+            .toList(),
+        skippedPlayerId: json['skippedPlayerId'] as String?,
+        reshuffled: json['reshuffled'] as bool? ?? false,
+      );
+}
+
+class SlapRankEntry {
+  final String playerId;
+  /// Milliseconds behind the first slap on this card.
+  final int gapMs;
+  /// 'pending' until judged, then 'right', 'wrong', or 'late' (the card had gone).
+  final String result;
+
+  const SlapRankEntry({
+    required this.playerId,
+    required this.gapMs,
+    required this.result,
+  });
+
+  Map<String, dynamic> toJson() => {
+        'playerId': playerId,
+        'gapMs': gapMs,
+        'result': result,
+      };
+
+  factory SlapRankEntry.fromJson(Map<String, dynamic> json) => SlapRankEntry(
+        playerId: json['playerId'] as String,
+        gapMs: json['gapMs'] as int,
+        result: json['result'] as String,
+      );
+}
+
+/// Everyone who tried to slap one discard, fastest first.
+class SlapRankingPayload {
+  /// Changes with every new card that can be slapped.
+  final int cardNo;
+  final List<SlapRankEntry> entries;
+
+  const SlapRankingPayload({required this.cardNo, required this.entries});
+
+  Map<String, dynamic> toJson() => {
+        'cardNo': cardNo,
+        'entries': entries.map((e) => e.toJson()).toList(),
+      };
+
+  factory SlapRankingPayload.fromJson(Map<String, dynamic> json) =>
+      SlapRankingPayload(
+        cardNo: json['cardNo'] as int,
+        entries: (json['entries'] as List<dynamic>)
+            .map((e) => SlapRankEntry.fromJson(e as Map<String, dynamic>))
+            .toList(),
+      );
+}
+
 class CardsPickedPayload {
   final String actorId;
   final String targetId;

@@ -4,11 +4,15 @@ import 'dart:convert';
 import 'package:cabo_shared/models/messages.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
+import 'server_clock.dart';
+
 /// Thin WebSocket wrapper. All business logic lives in providers.
 class GameClient {
   WebSocketChannel? _channel;
   StreamSubscription? _channelSub;
   final _controller = StreamController<GameMessage>.broadcast();
+  final clock = ServerClock();
+  Timer? _clockTimer;
 
   Stream<GameMessage> get messages => _controller.stream;
   bool get isConnected => _channel != null;
@@ -22,7 +26,15 @@ class GameClient {
       (data) {
         try {
           final json = jsonDecode(data as String) as Map<String, dynamic>;
-          _controller.add(GameMessage.fromJson(json));
+          final msg = GameMessage.fromJson(json);
+          if (msg.type == MsgType.clockPong) {
+            clock.addSample(
+              msg.payload['sentAt'] as int,
+              msg.payload['serverAt'] as int,
+            );
+            return;
+          }
+          _controller.add(msg);
         } catch (_) {}
       },
       onDone: () {
@@ -37,6 +49,9 @@ class GameClient {
   }
 
   void disconnect() {
+    _clockTimer?.cancel();
+    _clockTimer = null;
+    clock.reset();
     // Cancel the old channel listener BEFORE closing it so the onDone
     // callback doesn't fire an error into the broadcast controller.
     _channelSub?.cancel();
@@ -44,6 +59,28 @@ class GameClient {
     _channel?.sink.close();
     _channel = null;
   }
+
+  /// A burst of measurements right away, then one every few seconds so the
+  /// gap to the server clock stays accurate.
+  void startClockSync() {
+    _clockTimer?.cancel();
+    var burst = 5;
+    _clockTimer = Timer.periodic(const Duration(milliseconds: 200), (timer) {
+      _sendClockPing();
+      if (--burst == 0) {
+        timer.cancel();
+        _clockTimer = Timer.periodic(
+          const Duration(seconds: 5),
+          (_) => _sendClockPing(),
+        );
+      }
+    });
+  }
+
+  void _sendClockPing() => send(GameMessage(
+        type: MsgType.clockPing,
+        payload: {'sentAt': clock.localNowUs},
+      ));
 
   void send(GameMessage msg) {
     _channel?.sink.add(jsonEncode(msg.toJson()));
@@ -122,8 +159,15 @@ class GameClient {
         },
       ));
 
-  /// [seenRank] is the top discard on screen when the player tapped.
-  void matchCard(String targetId, int row, int col, String? seenRank) =>
+  /// [seenRank] is the top discard on screen when the player tapped, and
+  /// [tappedAtUs] is when their finger touched the card, on this device's clock.
+  void matchCard(
+    String targetId,
+    int row,
+    int col,
+    String? seenRank,
+    int tappedAtUs,
+  ) =>
       send(GameMessage(
         type: MsgType.matchCard,
         payload: {
@@ -131,6 +175,7 @@ class GameClient {
           'row': row,
           'col': col,
           'seenRank': seenRank,
+          'tapAt': clock.toServerUs(tappedAtUs),
         },
       ));
 
