@@ -122,9 +122,16 @@ class GameClient {
         },
       ));
 
-  void matchCard(String targetId, int row, int col) => send(GameMessage(
+  /// [seenRank] is the top discard on screen when the player tapped.
+  void matchCard(String targetId, int row, int col, String? seenRank) =>
+      send(GameMessage(
         type: MsgType.matchCard,
-        payload: {'targetId': targetId, 'row': row, 'col': col},
+        payload: {
+          'targetId': targetId,
+          'row': row,
+          'col': col,
+          'seenRank': seenRank,
+        },
       ));
 
   void giveCard(int row, int col) => send(GameMessage(

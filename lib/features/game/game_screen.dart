@@ -272,11 +272,15 @@ class _PlayingScreenState extends ConsumerState<_PlayingScreen> {
   /// Flash "SWAPPED!" top banner for N ms when a swap occurs
   bool _showSwapFlash = false;
   String _swapFlashText = '';
+  int _swapFlashId = 0;
   /// Briefly shows red dot on discard after someone else grabs the slap
   bool _slapTaken = false;
   /// Whether the local player must give a card to an opponent after a successful slap
   bool _pendingGiveCard = false;
   String? _pendingGiveCardTargetId;
+  /// When the server last confirmed the end of my move
+  DateTime? _myMoveEndedAt;
+  static const _repeatTapGuard = Duration(milliseconds: 800);
   /// The Queen/King pick being shown to everyone right now
   CardsPickedPayload? _activePick;
   final _tableKey = GlobalKey();
@@ -350,6 +354,10 @@ class _PlayingScreenState extends ConsumerState<_PlayingScreen> {
         if (latest.contains('swap') || latest.contains('Swap')) {
           _triggerSwapFlash(latest);
         }
+        // A wrong slap adds a card, so make sure everyone sees why
+        if (latest.contains('❌')) {
+          _triggerSwapFlash(latest);
+        }
         // Successful slap by someone else → briefly show red dot on discard
         if (latest.contains('⚡') && !next.matchWindowOpen) {
           setState(() => _slapTaken = true);
@@ -360,6 +368,13 @@ class _PlayingScreenState extends ConsumerState<_PlayingScreen> {
       }
       // Track pending give-card state
       final myId = ref.read(localPlayerProvider)?.id;
+      // Note when my move lands, so a repeat tap on my card isn't taken as a slap
+      if (prev != null &&
+          prev.currentPlayerId == myId &&
+          prev.turnPhase != 'waitingForDraw' &&
+          (next.currentPlayerId != myId || next.turnPhase == 'waitingForDraw')) {
+        _myMoveEndedAt = DateTime.now();
+      }
       final needsGive = next.pendingGiveCardAttackerId != null &&
           next.pendingGiveCardAttackerId == myId;
       if (_pendingGiveCard != needsGive) {
@@ -381,12 +396,16 @@ class _PlayingScreenState extends ConsumerState<_PlayingScreen> {
   }
 
   void _triggerSwapFlash(String msg) {
+    // Each banner gets its full time, even if it replaced an earlier one
+    final flashId = ++_swapFlashId;
     setState(() {
       _showSwapFlash = true;
       _swapFlashText = msg;
     });
     Future.delayed(const Duration(milliseconds: 2200), () {
-      if (mounted) setState(() => _showSwapFlash = false);
+      if (mounted && flashId == _swapFlashId) {
+        setState(() => _showSwapFlash = false);
+      }
     });
   }
 
@@ -1156,10 +1175,19 @@ class _PlayingScreenState extends ConsumerState<_PlayingScreen> {
     }
     // Match window: any player can slap their own cards (not during active power step)
     if (gs.matchWindowOpen && powerSel.step == PowerStep.none) {
-      return (row, col) =>
-          ref.read(gameClientProvider).matchCard(myId, row, col);
+      return (row, col) {
+        if (_isRepeatTapAfterMyMove) return;
+        ref.read(gameClientProvider).matchCard(
+              myId, row, col, gs.topDiscard?['rank'] as String?);
+      };
     }
     return null;
+  }
+
+  bool get _isRepeatTapAfterMyMove {
+    final endedAt = _myMoveEndedAt;
+    return endedAt != null &&
+        DateTime.now().difference(endedAt) < _repeatTapGuard;
   }
 
   bool _isOpponentTargetable(PowerSelectionState powerSel) {
@@ -1196,7 +1224,7 @@ class _PlayingScreenState extends ConsumerState<_PlayingScreen> {
     final client = ref.read(gameClientProvider);
     // Match window: slap an opponent's card
     if (gs.matchWindowOpen && powerSel.step == PowerStep.none) {
-      client.matchCard(oid, row, col);
+      client.matchCard(oid, row, col, gs.topDiscard?['rank'] as String?);
       return;
     }
     switch (powerSel.step) {

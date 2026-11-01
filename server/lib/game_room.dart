@@ -340,8 +340,16 @@ class GameRoom {
     // Target may be the player themselves or an opponent
     final targetId = payload['targetId'] as String? ?? session.playerId;
 
+    // The discard changed before this tap arrived, so it was aimed at an older
+    // card. Eliminated players are out of the game.
+    final seenRank = payload['seenRank'] as String?;
+    final isStaleTap =
+        seenRank != null && seenRank != _engine.state.topDiscard?.rank.name;
+    final isEliminated =
+        _engine.state.getPlayer(session.playerId)?.isEliminated ?? false;
+
     // Window is closed — no penalty
-    if (!_matchWindowOpen) {
+    if (!_matchWindowOpen || isStaleTap || isEliminated) {
       _send(ws, GameMessage(
         type: MsgType.matchAttemptResult,
         payload: MatchAttemptResultPayload(
@@ -395,11 +403,14 @@ class GameRoom {
     } else {
       final cardLabel = _cardLabel(
           result.revealedCard!.rank.name, result.revealedCard!.suit.name);
+      final owner = targetId == session.playerId
+          ? 'their own'
+          : "${_nameOf(targetId)}'s";
       // Check if the wrong slap triggered elimination (too many penalty cards)
       final eliminated =
           _engine.state.getPlayer(session.playerId)?.isEliminated ?? false;
       if (eliminated) {
-        _log('❌ $name slapped $cardLabel — WRONG! Too many penalties — $name is ELIMINATED! 💀');
+        _log('❌ $name slapped $owner $cardLabel — WRONG! Too many penalties — $name is ELIMINATED! 💀');
         // If it was their turn, advance to next active player
         if (_engine.state.currentPlayerId == session.playerId) {
           // They may have been holding a drawn card. Keep it in the game, under
@@ -415,7 +426,7 @@ class GameRoom {
         }
         _checkAllAttempted();
       } else {
-        _log('❌ $name slapped $cardLabel — WRONG! Penalty card added.');
+        _log('❌ $name slapped $owner $cardLabel — WRONG! Penalty card added.');
         _checkAllAttempted();
       }
     }
