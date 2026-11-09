@@ -66,6 +66,9 @@ class GameRoom {
   final List<_SlapAttempt> _slapAttempts = [];
   Timer? _slapSettleTimer;
   int _slapCardNo = 0;
+  /// Counting down to a slap window the current player asked for.
+  Timer? _slapCountdownTimer;
+  static const _slapCountdown = Duration(seconds: 3);
   int _windowOpenedAtUs = 0;
   /// A correct slap has taken the current card.
   bool _slapTaken = false;
@@ -157,6 +160,7 @@ class GameRoom {
         case MsgType.skipPower:      _onSkipPower(ws, msg.payload);
         case MsgType.matchCard:      _onMatchCard(ws, msg.payload);
         case MsgType.giveCard:       _onGiveCard(ws, msg.payload);
+        case MsgType.activateSlap:   _onActivateSlap(ws);
         default: _sendError(ws, 'Unknown message type: ${msg.type}');
       }
     } catch (e) {
@@ -247,6 +251,57 @@ class GameRoom {
     _broadcastState();
   }
 
+  /// The current player, holding a drawn card, wants to slap. If they can
+  /// slap right now, everyone is told; otherwise a slap window opens for
+  /// everyone after a short countdown.
+  void _onActivateSlap(WebSocket ws) {
+    final session = _sessionFor(ws);
+    if (session == null) return;
+    final state = _engine.state;
+    final playerId = session.playerId;
+    if (state.phase != GamePhase.playing ||
+        state.currentPlayerId != playerId ||
+        state.turnPhase != TurnPhase.cardDrawn ||
+        _slapCountdownTimer != null) {
+      return;
+    }
+    if (state.discardPile.isEmpty) {
+      _sendError(ws, 'There is nothing to slap yet');
+      return;
+    }
+    final name = _nameOf(playerId);
+    final canSlapNow = _matchWindowOpen && !_slapAttemptedIds.contains(playerId);
+    if (canSlapNow) {
+      _log('🖐 $name is going to slap!');
+      _broadcast(GameMessage(
+        type: MsgType.slapActivated,
+        payload: SlapActivatedPayload(playerId: playerId).toJson(),
+      ));
+      _broadcastState();
+      return;
+    }
+    _log('🖐 $name turned slapping on — it opens for everyone in 3 seconds.');
+    _broadcast(GameMessage(
+      type: MsgType.slapActivated,
+      payload: SlapActivatedPayload(
+        playerId: playerId,
+        countdownMs: _slapCountdown.inMilliseconds,
+      ).toJson(),
+    ));
+    _broadcastState();
+    _slapCountdownTimer = Timer(_slapCountdown, () {
+      _slapCountdownTimer = null;
+      _openMatchWindow();
+    });
+  }
+
+  /// The held card has been dealt with, so a slap countdown is no longer needed:
+  /// the move opens its own window, or a power holds it back until it's done.
+  void _cancelSlapCountdown() {
+    _slapCountdownTimer?.cancel();
+    _slapCountdownTimer = null;
+  }
+
   void _onDiscardDrawn(WebSocket ws, Map<String, dynamic> payload) {
     final session = _sessionFor(ws);
     if (session == null) return;
@@ -261,6 +316,7 @@ class GameRoom {
     final wouldBeNextId = _engine.state.getNextPlayerId(session.playerId);
 
     _engine.discardDrawn(session.playerId);
+    _cancelSlapCountdown();
 
     // Using a power is the one time slapping stops.
     if (_engine.state.turnPhase == TurnPhase.usingPower) _closeMatchWindow();
@@ -300,6 +356,7 @@ class GameRoom {
     final row = payload['row'] as int;
     final col = payload['col'] as int;
     final handCard = _engine.swapDrawnWithHand(session.playerId, row, col);
+    _cancelSlapCountdown();
     _log('$name swapped their ${cardPositionName(row, col)} card.');
     // Everyone sees which position it was: the card lifts and glows, face down,
     // then flips face up on its way to the discard pile as the drawn card takes its place.

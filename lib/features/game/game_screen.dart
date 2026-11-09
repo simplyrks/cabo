@@ -300,6 +300,10 @@ class _PlayingScreenState extends ConsumerState<_PlayingScreen> {
   final _heldKey = GlobalKey();
   /// Cards on their way to that spot, which stays empty until they land
   int _flightsToHeld = 0;
+  /// While holding a drawn card: true when a tap on my card slaps it, not swaps
+  bool _slapMode = false;
+  /// When I last slapped in slap mode, so a double tap doesn't also swap
+  DateTime? _lastSlapModeTapAt;
   final Map<String, GlobalKey> _handKeys = {};
   final List<Widget> _tableAnimations = [];
   int _nextAnimationId = 0;
@@ -631,6 +635,21 @@ class _PlayingScreenState extends ConsumerState<_PlayingScreen> {
       });
     });
 
+    // The current player switched to slapping: a banner, maybe a countdown, for everyone
+    ref.listenManual(slapActivatedProvider, (_, activated) {
+      if (activated == null) return;
+      final name = activated.playerId == myId ? 'You' : _playerName(activated.playerId);
+      setState(() {
+        if (activated.playerId == myId) _slapMode = true;
+        _addAnimation((key, remove) => SlapBanner(
+              key: key,
+              name: name,
+              countdown: Duration(milliseconds: activated.countdownMs),
+              onDone: remove,
+            ));
+      });
+    });
+
     // Queen/King: show everyone which positions were picked
     ref.listenManual(cardsPickedProvider, (_, pick) {
       if (pick == null) return;
@@ -662,6 +681,11 @@ class _PlayingScreenState extends ConsumerState<_PlayingScreen> {
       }
       // Track pending give-card state
       final myId = ref.read(localPlayerProvider)?.id;
+      // Slap mode only lasts while I'm holding a drawn card
+      if (_slapMode &&
+          (next.currentPlayerId != myId || next.turnPhase != 'cardDrawn')) {
+        setState(() => _slapMode = false);
+      }
       // The peek hold is over: cover the card again
       if (prev?.peekHoldActorId != null && next.peekHoldActorId == null) {
         setState(_peekedCards.clear);
@@ -1380,17 +1404,94 @@ class _PlayingScreenState extends ConsumerState<_PlayingScreen> {
                     ),
                     child: const Text('Discard & use power', style: TextStyle(fontSize: 12)),
                   ),
-                  const SizedBox(height: 4),
-                  const Text(
-                    'or tap your card below to swap',
-                    style: TextStyle(fontSize: 11, color: AppColors.textSecondary),
-                  ),
+                  const SizedBox(height: 8),
+                  _buildSwapSlapSwitch(),
                 ],
               ),
             ],
           ],
         ),
       ),
+    );
+  }
+
+  /// What a tap on my own card does while I hold a drawn card: swap or slap.
+  Widget _buildSwapSlapSwitch() {
+    final canSlap = gs.topDiscard != null;
+    final String hint;
+    if (!_slapMode) {
+      hint = 'Tap your card to swap it';
+    } else if (gs.matchWindowOpen) {
+      hint = 'Tap your card to slap it';
+    } else {
+      hint = 'Slapping opens in a moment…';
+    }
+
+    Widget option(String label, bool selected, Color color, VoidCallback? onTap) {
+      return GestureDetector(
+        onTap: onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 150),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+          decoration: BoxDecoration(
+            color: selected ? color : Colors.transparent,
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: Text(
+            label,
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.bold,
+              color: selected
+                  ? Colors.white
+                  : onTap == null
+                      ? AppColors.textSecondary.withValues(alpha: 0.4)
+                      : AppColors.textSecondary,
+            ),
+          ),
+        ),
+      );
+    }
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          padding: const EdgeInsets.all(2),
+          decoration: BoxDecoration(
+            color: AppColors.background,
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(color: AppColors.textSecondary.withValues(alpha: 0.25)),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              option('SWAP', !_slapMode, AppColors.highlight,
+                  () => setState(() => _slapMode = false)),
+              option(
+                'SLAP',
+                _slapMode,
+                AppColors.danger,
+                canSlap && !_slapMode
+                    ? () {
+                        setState(() => _slapMode = true);
+                        ref.read(gameClientProvider).activateSlap();
+                      }
+                    : null,
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          hint,
+          style: TextStyle(
+            fontSize: 11,
+            color: _slapMode ? AppColors.danger : AppColors.textSecondary,
+          ),
+        ),
+      ],
     );
   }
 
@@ -1566,10 +1667,27 @@ class _PlayingScreenState extends ConsumerState<_PlayingScreen> {
     if (_pendingGiveCard) {
       return (row, col) => ref.read(gameClientProvider).giveCard(row, col);
     }
-    // Swap drawn card with hand
+    // Holding a drawn card: a tap swaps, unless slap mode is on
     if (isMyTurn && gs.turnPhase == 'cardDrawn') {
-      return (row, col) =>
-          ref.read(gameClientProvider).swapDrawnWithHand(row, col);
+      if (_slapMode) {
+        // Still counting down to the slap window: a tap does nothing yet
+        if (!gs.matchWindowOpen) return null;
+        return (row, col) {
+          _sendSlap(myId, row, col);
+          // One slap, then back to swapping
+          setState(() {
+            _slapMode = false;
+            _lastSlapModeTapAt = DateTime.now();
+          });
+        };
+      }
+      return (row, col) {
+        final slapAt = _lastSlapModeTapAt;
+        if (slapAt != null && DateTime.now().difference(slapAt) < _repeatTapGuard) {
+          return;
+        }
+        ref.read(gameClientProvider).swapDrawnWithHand(row, col);
+      };
     }
     // Power: peek own
     if (isMyTurn &&

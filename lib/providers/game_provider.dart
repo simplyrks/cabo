@@ -188,6 +188,9 @@ final cardsPickedProvider = StateProvider<CardsPickedPayload?>((_) => null);
 /// Who has tried to slap the current card, fastest first.
 final slapRankingProvider = StateProvider<SlapRankingPayload?>((_) => null);
 
+/// The current player switching to slap mid-turn, announced to everyone.
+final slapActivatedProvider = StateProvider<SlapActivatedPayload?>((_) => null);
+
 // ─── Table animations ─────────────────────────────────────────────────────────
 
 /// The latest card movements for this screen to play.
@@ -212,6 +215,7 @@ void resetGameSession(WidgetRef ref) {
   ref.read(cardsPickedProvider.notifier).state = null;
   ref.read(slapRankingProvider.notifier).state = null;
   ref.read(tableAnimationProvider.notifier).state = null;
+  ref.read(slapActivatedProvider.notifier).state = null;
 }
 
 // ─── Message listener ─────────────────────────────────────────────────────────
@@ -278,6 +282,10 @@ class MessageRouter {
       case MsgType.slapRanking:
         _ref.read(slapRankingProvider.notifier).state =
             SlapRankingPayload.fromJson(msg.payload);
+
+      case MsgType.slapActivated:
+        _ref.read(slapActivatedProvider.notifier).state =
+            SlapActivatedPayload.fromJson(msg.payload);
 
       case MsgType.tableAnimation:
         _ref.read(tableAnimationProvider.notifier).state =

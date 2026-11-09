@@ -641,3 +641,120 @@ class _CaboSplashState extends State<CaboSplash>
     );
   }
 }
+
+/// A banner across the table when the current player switches to slapping,
+/// counting down to the moment slapping opens for everyone.
+class SlapBanner extends StatefulWidget {
+  /// "Alice" or "You"
+  final String name;
+  final Duration countdown;
+  final VoidCallback onDone;
+
+  const SlapBanner({
+    super.key,
+    required this.name,
+    required this.countdown,
+    required this.onDone,
+  });
+
+  static const _afterCountdown = Duration(milliseconds: 1100);
+
+  @override
+  State<SlapBanner> createState() => _SlapBannerState();
+}
+
+class _SlapBannerState extends State<SlapBanner>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl;
+  late final int _totalMs =
+      (widget.countdown + SlapBanner._afterCountdown).inMilliseconds;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+      vsync: this,
+      duration: Duration(milliseconds: _totalMs),
+    )
+      ..addStatusListener((status) {
+        if (status == AnimationStatus.completed) widget.onDone();
+      })
+      ..forward();
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final verb = widget.name == 'You' ? 'are' : 'is';
+    return Positioned.fill(
+      child: IgnorePointer(
+        child: Align(
+          alignment: const Alignment(0, -0.2),
+          child: AnimatedBuilder(
+            animation: _ctrl,
+            builder: (_, __) {
+              final elapsedMs = _ctrl.value * _totalMs;
+              final leftMs = widget.countdown.inMilliseconds - elapsedMs;
+              final String big;
+              final String small;
+              if (widget.countdown == Duration.zero) {
+                big = 'SLAP!';
+                small = '${widget.name} $verb slapping';
+              } else if (leftMs > 0) {
+                big = '${(leftMs / 1000).ceil()}';
+                small = '${widget.name} turned slap on — get ready';
+              } else {
+                big = 'SLAP!';
+                small = 'Slapping is open for everyone';
+              }
+              final t = _ctrl.value;
+              final appear = Curves.easeOutBack.transform((elapsedMs / 250).clamp(0.0, 1.0));
+              final fade = 1 - ((t - 0.85) / 0.15).clamp(0.0, 1.0);
+              return Opacity(
+                opacity: fade,
+                child: Transform.scale(
+                  scale: appear,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 10),
+                    decoration: BoxDecoration(
+                      color: AppColors.danger,
+                      borderRadius: BorderRadius.circular(14),
+                      boxShadow: const [BoxShadow(color: Colors.black54, blurRadius: 14)],
+                    ),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          '🖐 $small',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        Text(
+                          big,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 34,
+                            fontWeight: FontWeight.w900,
+                            height: 1.1,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+      ),
+    );
+  }
+}

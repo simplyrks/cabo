@@ -104,6 +104,9 @@ class GameClient {
   void discardDrawn() =>
       send(GameMessage(type: MsgType.discardDrawn, payload: {}));
 
+  void activateSlap() =>
+      send(GameMessage(type: MsgType.activateSlap, payload: {}));
+
   void swapDrawnWithHand(int row, int col) => send(GameMessage(
         type: MsgType.swapDrawnWithHand,
         payload: {'row': row, 'col': col},

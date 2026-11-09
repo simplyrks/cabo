@@ -22,6 +22,7 @@ class MsgType {
   static const peekResult = 'peekResult'; // client acks a peek
   static const initialPeekDone = 'initialPeekDone';
   static const clockPing = 'clockPing'; // measures the gap to the server clock
+  static const activateSlap = 'activateSlap'; // current player wants to slap mid-turn
 
   // Server → Client
   static const lobbyState = 'lobbyState';
@@ -29,6 +30,7 @@ class MsgType {
   static const peekReveal = 'peekReveal'; // server reveals a card to ONE player
   static const cardsPicked = 'cardsPicked'; // Queen/King: card positions, to everyone
   static const clockPong = 'clockPong'; // answer to clockPing
+  static const slapActivated = 'slapActivated'; // banner for everyone, maybe with a countdown
   static const slapRanking = 'slapRanking'; // who tried to slap this card, in order
   static const tableAnimation = 'tableAnimation'; // card movements for every screen to play
   static const matchAttemptResult = 'matchAttemptResult';
@@ -440,6 +442,23 @@ class SlapRankingPayload {
         entries: (json['entries'] as List<dynamic>)
             .map((e) => SlapRankEntry.fromJson(e as Map<String, dynamic>))
             .toList(),
+      );
+}
+
+/// The current player switched to slapping while holding a drawn card. With a
+/// countdown, the slap window opens for everyone once it runs out.
+class SlapActivatedPayload {
+  final String playerId;
+  final int countdownMs;
+
+  const SlapActivatedPayload({required this.playerId, this.countdownMs = 0});
+
+  Map<String, dynamic> toJson() => {'playerId': playerId, 'countdownMs': countdownMs};
+
+  factory SlapActivatedPayload.fromJson(Map<String, dynamic> json) =>
+      SlapActivatedPayload(
+        playerId: json['playerId'] as String,
+        countdownMs: json['countdownMs'] as int? ?? 0,
       );
 }
 
