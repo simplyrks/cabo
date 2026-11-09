@@ -36,6 +36,9 @@ class FlyingCard extends StatefulWidget {
   final Duration delay;
   final VoidCallback onLanded;
 
+  /// Stays visible at its starting point during the delay, instead of hidden.
+  final bool visibleWhileWaiting;
+
   const FlyingCard({
     super.key,
     required this.from,
@@ -43,6 +46,7 @@ class FlyingCard extends StatefulWidget {
     this.card,
     this.delay = Duration.zero,
     required this.onLanded,
+    this.visibleWhileWaiting = false,
   });
 
   static const flightTime = Duration(milliseconds: 380);
@@ -79,8 +83,14 @@ class _FlyingCardState extends State<FlyingCard>
     return AnimatedBuilder(
       animation: _ctrl,
       builder: (_, __) {
-        // Waiting for its delay, or already landed
-        if (_ctrl.value == 0 || _ctrl.isCompleted) return const SizedBox.shrink();
+        if (_ctrl.isCompleted) return const SizedBox.shrink();
+        if (_ctrl.value == 0) {
+          if (!widget.visibleWhileWaiting) return const SizedBox.shrink();
+          return Positioned.fromRect(
+            rect: widget.from,
+            child: _fitted(_cardFace(widget.card)),
+          );
+        }
         _lastTo = widget.to() ?? _lastTo;
         final t = Curves.easeInOutCubic.transform(_ctrl.value);
         // A little lift in the middle of the flight
@@ -271,11 +281,90 @@ class _SlapRevealCardState extends State<SlapRevealCard>
   }
 }
 
-/// A pulsing ring around the card someone is looking at, without showing it.
+/// A card lifted out of its place, face down and glowing, so everyone can see
+/// which position is about to move.
+class LiftedCard extends StatefulWidget {
+  final Rect? Function() slot;
+  final Duration duration;
+  final VoidCallback onDone;
+
+  const LiftedCard({
+    super.key,
+    required this.slot,
+    required this.duration,
+    required this.onDone,
+  });
+
+  @override
+  State<LiftedCard> createState() => _LiftedCardState();
+}
+
+class _LiftedCardState extends State<LiftedCard>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl;
+  Rect? _lastSlot;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(vsync: this, duration: widget.duration)
+      ..addStatusListener((status) {
+        if (status == AnimationStatus.completed) widget.onDone();
+      })
+      ..forward();
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _ctrl,
+      builder: (_, __) {
+        _lastSlot = widget.slot() ?? _lastSlot;
+        final rect = _lastSlot;
+        if (rect == null) return const SizedBox.shrink();
+        final rise = Curves.easeOutBack.transform((_ctrl.value / 0.45).clamp(0.0, 1.0));
+        return Positioned.fromRect(
+          rect: rect,
+          child: Transform.translate(
+            offset: Offset(0, -10 * rise),
+            child: Transform.scale(
+              scale: 1 + 0.14 * rise,
+              child: Container(
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(9),
+                  border: Border.all(color: AppColors.gold, width: 3),
+                  boxShadow: [
+                    BoxShadow(
+                      color: AppColors.gold.withValues(alpha: 0.85),
+                      blurRadius: 18,
+                      spreadRadius: 3,
+                    ),
+                  ],
+                ),
+                child: _fitted(_cardFace(null)),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+/// A pulsing ring and an eye on the card someone is looking at, without showing it.
 class SlotPulse extends StatefulWidget {
   final Rect? Function() slot;
 
-  const SlotPulse({super.key, required this.slot});
+  /// Off for the player reading the card, because the glow tints what's inside the ring.
+  final bool glow;
+
+  const SlotPulse({super.key, required this.slot, this.glow = true});
 
   @override
   State<SlotPulse> createState() => _SlotPulseState();
@@ -308,19 +397,40 @@ class _SlotPulseState extends State<SlotPulse>
         final rect = widget.slot();
         if (rect == null) return const SizedBox.shrink();
         return Positioned.fromRect(
-          rect: rect.inflate(4),
-          child: Container(
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: AppColors.highlight, width: 3),
-              boxShadow: [
-                BoxShadow(
-                  color: AppColors.highlight.withValues(alpha: 0.7 * _ctrl.value),
-                  blurRadius: 14 * _ctrl.value,
-                  spreadRadius: 2 * _ctrl.value,
+          rect: rect.inflate(5),
+          child: Stack(
+            clipBehavior: Clip.none,
+            children: [
+              Positioned.fill(
+                child: Container(
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(11),
+                    border: Border.all(color: AppColors.gold, width: 4),
+                    boxShadow: widget.glow
+                        ? [
+                            BoxShadow(
+                              color: AppColors.gold.withValues(alpha: 0.4 + 0.5 * _ctrl.value),
+                              blurRadius: 8 + 14 * _ctrl.value,
+                              spreadRadius: 1 + 3 * _ctrl.value,
+                            ),
+                          ]
+                        : null,
+                  ),
                 ),
-              ],
-            ),
+              ),
+              Positioned(
+                top: -9,
+                right: -9,
+                child: Container(
+                  padding: const EdgeInsets.all(3),
+                  decoration: const BoxDecoration(
+                    color: AppColors.gold,
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(Icons.visibility, size: 14, color: Colors.black87),
+                ),
+              ),
+            ],
           ),
         );
       },

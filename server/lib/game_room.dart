@@ -71,6 +71,8 @@ class GameRoom {
   bool _slapTaken = false;
   /// How long a slapped card stays up front on every screen before it moves on.
   static const _slapRevealMs = 1500;
+  /// How long a swapped card stays lifted and highlighted before it moves.
+  static const _swapHighlightMs = 900;
 
   // ─── Pending give-card (after successful opponent slap) ───────────────────────
   String? _pendingGiveCardAttackerId;
@@ -298,18 +300,26 @@ class GameRoom {
     final row = payload['row'] as int;
     final col = payload['col'] as int;
     final handCard = _engine.swapDrawnWithHand(session.playerId, row, col);
-    _log('$name swapped their drawn card with one of their own cards.');
-    _animate(TableAnimationPayload(moves: [
-      CardMove(
-        from: CardSpot.heldBy(session.playerId),
-        to: CardSpot.inHand(session.playerId, row, col),
-      ),
-      CardMove(
-        from: CardSpot.inHand(session.playerId, row, col),
-        to: const CardSpot.discardPile(),
-        card: handCard,
-      ),
-    ]));
+    _log('$name swapped their ${cardPositionName(row, col)} card.');
+    // Everyone sees which position it was: the card lifts and glows, face down,
+    // then flips face up on its way to the discard pile as the drawn card takes its place.
+    _animate(TableAnimationPayload(
+      highlight: CardSpot.inHand(session.playerId, row, col),
+      highlightMs: _swapHighlightMs,
+      moves: [
+        CardMove(
+          from: CardSpot.inHand(session.playerId, row, col),
+          to: const CardSpot.discardPile(),
+          card: handCard,
+          delayMs: _swapHighlightMs,
+        ),
+        CardMove(
+          from: CardSpot.heldBy(session.playerId),
+          to: CardSpot.inHand(session.playerId, row, col),
+          delayMs: _swapHighlightMs + 120,
+        ),
+      ],
+    ));
     _broadcastState();
     _checkRoundEnd();
     if (_engine.state.phase != GamePhase.roundEnd) _openMatchWindow();
@@ -337,7 +347,7 @@ class GameRoom {
       case 'peekOwn':
         final reveal = _engine.usePeekOwn(pid, payload['row'] as int, payload['col'] as int);
         _send(ws, GameMessage(type: MsgType.peekReveal, payload: reveal.toJson()));
-        _log('$name peeked at one of their own hidden cards.');
+        _log('$name peeked at their own ${cardPositionName(payload['row'] as int, payload['col'] as int)} card.');
         _startPeekHold(pid, pid, payload['row'] as int, payload['col'] as int);
         return;
 
@@ -348,7 +358,7 @@ class GameRoom {
           payload['row'] as int, payload['col'] as int,
         );
         _send(ws, GameMessage(type: MsgType.peekReveal, payload: reveal.toJson()));
-        _log('$name secretly peeked at one of $targetName\'s cards.');
+        _log('$name peeked at $targetName\'s ${cardPositionName(payload['row'] as int, payload['col'] as int)} card.');
         _startPeekHold(
           pid, payload['targetId'] as String,
           payload['row'] as int, payload['col'] as int,

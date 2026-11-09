@@ -394,6 +394,14 @@ class _PlayingScreenState extends ConsumerState<_PlayingScreen> {
       for (final move in animation.moves) {
         _addFlight(move);
       }
+      if (animation.highlight != null) {
+        _addAnimation((key, remove) => LiftedCard(
+              key: key,
+              slot: () => _spotRect(animation.highlight!),
+              duration: Duration(milliseconds: animation.highlightMs),
+              onDone: remove,
+            ));
+      }
       if (animation.slapReveals.isNotEmpty) {
         for (final reveal in animation.slapReveals) {
           _addSlapReveal(reveal);
@@ -447,6 +455,8 @@ class _PlayingScreenState extends ConsumerState<_PlayingScreen> {
           to: () => _spotRect(move.to),
           card: move.card?.toJson(),
           delay: Duration(milliseconds: move.delayMs),
+          // A drawn card stays in the player's hand until it's time to swap it in
+          visibleWhileWaiting: move.from.kind == CardSpot.held,
           onLanded: () {
             for (final done in landing) {
               done();
@@ -550,17 +560,20 @@ class _PlayingScreenState extends ConsumerState<_PlayingScreen> {
   }
 
   String _peekHoldMessage(String actorId, String targetId) {
+    final position = gs.peekHoldRow != null && gs.peekHoldCol != null
+        ? '${cardPositionName(gs.peekHoldRow!, gs.peekHoldCol!)} '
+        : '';
     final String looking;
     if (actorId == myId) {
       looking = targetId == myId
-          ? 'You are looking at your own card'
-          : "You are looking at ${_playerName(targetId)}'s card";
+          ? 'You are looking at your own ${position}card'
+          : "You are looking at ${_playerName(targetId)}'s ${position}card";
     } else if (targetId == actorId) {
-      looking = '${_playerName(actorId)} is looking at their own card';
+      looking = '${_playerName(actorId)} is looking at their own ${position}card';
     } else if (targetId == myId) {
-      looking = '${_playerName(actorId)} is looking at your card';
+      looking = '${_playerName(actorId)} is looking at your ${position}card';
     } else {
-      looking = "${_playerName(actorId)} is looking at ${_playerName(targetId)}'s card";
+      looking = "${_playerName(actorId)} is looking at ${_playerName(targetId)}'s ${position}card";
     }
     return '$looking — game on hold';
   }
@@ -768,6 +781,7 @@ class _PlayingScreenState extends ConsumerState<_PlayingScreen> {
                         gs.peekHoldRow != null &&
                         gs.peekHoldCol != null)
                       SlotPulse(
+                        glow: gs.peekHoldActorId != myId,
                         slot: () => _slotRect(
                           gs.peekHoldTargetId!,
                           gs.peekHoldRow!,

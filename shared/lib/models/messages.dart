@@ -226,6 +226,12 @@ class PeekRevealPayload {
 
 // ─── Match attempt result (server → all clients) ─────────────────────────────
 
+/// A card's position in a hand, in words. Rows past the first two are extras.
+String cardPositionName(int row, int col) {
+  if (row > 1) return 'extra';
+  return '${row == 0 ? 'top' : 'bottom'}-${col == 0 ? 'left' : 'right'}';
+}
+
 /// Which card positions a Queen or King picked. Sent to everyone, and on purpose
 /// says nothing about the cards themselves or whether a swap actually happened.
 /// A place on the table a card can move from or to.
@@ -350,12 +356,17 @@ class TableAnimationPayload {
   final List<SlapReveal> slapReveals;
   final String? skippedPlayerId;
   final bool reshuffled;
+  /// A card lifted and highlighted, face down, before it moves.
+  final CardSpot? highlight;
+  final int highlightMs;
 
   const TableAnimationPayload({
     this.moves = const [],
     this.slapReveals = const [],
     this.skippedPlayerId,
     this.reshuffled = false,
+    this.highlight,
+    this.highlightMs = 0,
   });
 
   Map<String, dynamic> toJson() => {
@@ -363,6 +374,8 @@ class TableAnimationPayload {
         'slapReveals': slapReveals.map((r) => r.toJson()).toList(),
         'skippedPlayerId': skippedPlayerId,
         'reshuffled': reshuffled,
+        'highlight': highlight?.toJson(),
+        'highlightMs': highlightMs,
       };
 
   factory TableAnimationPayload.fromJson(Map<String, dynamic> json) =>
@@ -375,6 +388,10 @@ class TableAnimationPayload {
             .toList(),
         skippedPlayerId: json['skippedPlayerId'] as String?,
         reshuffled: json['reshuffled'] as bool? ?? false,
+        highlight: json['highlight'] != null
+            ? CardSpot.fromJson(json['highlight'] as Map<String, dynamic>)
+            : null,
+        highlightMs: json['highlightMs'] as int? ?? 0,
       );
 }
 
