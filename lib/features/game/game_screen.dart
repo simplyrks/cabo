@@ -296,6 +296,10 @@ class _PlayingScreenState extends ConsumerState<_PlayingScreen> {
   final _deckKey = GlobalKey();
   final _discardKey = GlobalKey();
   final _drawnCardKey = GlobalKey();
+  /// The spot between the deck and the discard where a drawn card waits
+  final _heldKey = GlobalKey();
+  /// Cards on their way to that spot, which stays empty until they land
+  int _flightsToHeld = 0;
   final Map<String, GlobalKey> _handKeys = {};
   final List<Widget> _tableAnimations = [];
   int _nextAnimationId = 0;
@@ -342,8 +346,8 @@ class _PlayingScreenState extends ConsumerState<_PlayingScreen> {
     return Rect.fromCenter(center: hand.center, width: size.width, height: size.height);
   }
 
-  /// Where a place on the table is on this screen right now. Your own drawn
-  /// card sits in its panel; anyone else's is held at their hand.
+  /// Where a place on the table is on this screen right now. A drawn card
+  /// waits between the deck and the discard, where everyone can see it.
   Rect? _spotRect(CardSpot spot) {
     switch (spot.kind) {
       case CardSpot.deck:
@@ -351,10 +355,7 @@ class _PlayingScreenState extends ConsumerState<_PlayingScreen> {
       case CardSpot.discard:
         return _keyRect(_discardKey);
       case CardSpot.held:
-        if (spot.playerId == myId) {
-          return _keyRect(_drawnCardKey) ?? _handRect(myId);
-        }
-        return _handRect(spot.playerId!);
+        return _keyRect(_heldKey) ?? _handRect(spot.playerId!);
       default:
         return _slotRect(spot.playerId!, spot.row!, spot.col!);
     }
@@ -437,9 +438,13 @@ class _PlayingScreenState extends ConsumerState<_PlayingScreen> {
       _flightsToDiscard++;
       landing.add(() => _flightsToDiscard--);
     }
-    if (move.to.kind == CardSpot.held && move.to.playerId == myId) {
-      _flightsToMyDrawnCard++;
-      landing.add(() => _flightsToMyDrawnCard--);
+    if (move.to.kind == CardSpot.held) {
+      _flightsToHeld++;
+      landing.add(() => _flightsToHeld--);
+      if (move.to.playerId == myId) {
+        _flightsToMyDrawnCard++;
+        landing.add(() => _flightsToMyDrawnCard--);
+      }
     }
 
     // Started off-screen somehow: skip the flight but keep the game correct.
@@ -932,9 +937,12 @@ class _PlayingScreenState extends ConsumerState<_PlayingScreen> {
           padding: const EdgeInsets.symmetric(vertical: 8),
           child: Row(
             mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               _buildDrawPile(),
-              const SizedBox(width: 20),
+              const SizedBox(width: 16),
+              _buildHeldSpot(),
+              const SizedBox(width: 16),
               _buildDiscardPile(),
             ],
           ),
@@ -1202,6 +1210,42 @@ class _PlayingScreenState extends ConsumerState<_PlayingScreen> {
             ),
         ],
       ),
+    );
+  }
+
+  /// The drawn card, face down and glowing, while its player decides what to do.
+  Widget _buildHeldSpot() {
+    final holderId = gs.turnPhase == 'cardDrawn' ? gs.currentPlayerId : null;
+    final showing = holderId != null && _flightsToHeld == 0;
+    return Column(
+      children: [
+        SizedBox(
+          key: _heldKey,
+          width: 52,
+          height: 74,
+          child: showing
+              ? const HeldCardGlow()
+              : DecoratedBox(
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(7),
+                    border: Border.all(
+                      color: AppColors.textSecondary.withValues(alpha: 0.15),
+                    ),
+                  ),
+                ),
+        ),
+        const SizedBox(height: 4),
+        SizedBox(
+          width: 64,
+          child: Text(
+            holderId == null ? '' : (holderId == myId ? 'You' : _playerName(holderId)),
+            textAlign: TextAlign.center,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontSize: 11, color: AppColors.gold),
+          ),
+        ),
+      ],
     );
   }
 

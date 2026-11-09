@@ -26,6 +26,54 @@ Widget _cardFace(Map<String, dynamic>? card) => SizedBox(
 /// A card scaled to fit any size on the table.
 Widget _fitted(Widget card) => FittedBox(fit: BoxFit.fill, child: card);
 
+/// A gold glow around a card; [strength] runs from 0 (faint) to 1 (bright).
+Widget _goldGlow(Widget child, double strength) => DecoratedBox(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: AppColors.gold, width: 2.5),
+        boxShadow: [
+          BoxShadow(
+            color: AppColors.gold.withValues(alpha: 0.35 + 0.5 * strength),
+            blurRadius: 8 + 12 * strength,
+            spreadRadius: 1 + 3 * strength,
+          ),
+        ],
+      ),
+      child: child,
+    );
+
+/// A drawn card waiting beside the deck, face down and gently pulsing, so
+/// everyone can see a card is in play before it's swapped in or discarded.
+class HeldCardGlow extends StatefulWidget {
+  const HeldCardGlow({super.key});
+
+  @override
+  State<HeldCardGlow> createState() => _HeldCardGlowState();
+}
+
+class _HeldCardGlowState extends State<HeldCardGlow>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 900),
+  )..repeat(reverse: true);
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _ctrl,
+      builder: (_, child) => _goldGlow(child!, _ctrl.value),
+      child: _fitted(_cardFace(null)),
+    );
+  }
+}
+
 /// One card travelling from one place to another.
 class FlyingCard extends StatefulWidget {
   final Rect from;
@@ -86,9 +134,10 @@ class _FlyingCardState extends State<FlyingCard>
         if (_ctrl.isCompleted) return const SizedBox.shrink();
         if (_ctrl.value == 0) {
           if (!widget.visibleWhileWaiting) return const SizedBox.shrink();
+          // Still the card held beside the deck, glowing until it moves
           return Positioned.fromRect(
             rect: widget.from,
-            child: _fitted(_cardFace(widget.card)),
+            child: _goldGlow(_fitted(_cardFace(widget.card)), 0.7),
           );
         }
         _lastTo = widget.to() ?? _lastTo;

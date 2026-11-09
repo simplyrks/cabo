@@ -713,6 +713,12 @@ class GameRoom {
           if (drawn != null) {
             _engine.state.discardPile.insert(0, drawn);
             _engine.state.drawnCard = null;
+            // It leaves the spot beside the deck, face down, for the discard pile
+            moves.add(CardMove(
+              from: CardSpot.heldBy(playerId),
+              to: const CardSpot.discardPile(),
+              delayMs: _slapRevealMs,
+            ));
           }
           _engine.state.currentPlayerId =
               _engine.state.getNextPlayerId(playerId);
