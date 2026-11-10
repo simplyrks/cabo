@@ -23,6 +23,7 @@ class MsgType {
   static const initialPeekDone = 'initialPeekDone';
   static const clockPing = 'clockPing'; // measures the gap to the server clock
   static const activateSlap = 'activateSlap'; // current player wants to slap mid-turn
+  static const rejoin = 'rejoin'; // take back a seat after a dropped connection
 
   // Server → Client
   static const lobbyState = 'lobbyState';
@@ -31,6 +32,8 @@ class MsgType {
   static const cardsPicked = 'cardsPicked'; // Queen/King: card positions, to everyone
   static const clockPong = 'clockPong'; // answer to clockPing
   static const slapActivated = 'slapActivated'; // banner for everyone, maybe with a countdown
+  static const rejoinFailed = 'rejoinFailed'; // the seat is gone, e.g. the round ended
+  static const seatTaken = 'seatTaken'; // the same seat connected from somewhere else
   static const slapRanking = 'slapRanking'; // who tried to slap this card, in order
   static const tableAnimation = 'tableAnimation'; // card movements for every screen to play
   static const matchAttemptResult = 'matchAttemptResult';
@@ -107,6 +110,8 @@ class GameStatePayload {
   /// Which card position is being looked at. Never the card itself.
   final int? peekHoldRow;
   final int? peekHoldCol;
+  /// The current player is away: how long until the game plays for them.
+  final int? awayActionInMs;
 
   const GameStatePayload({
     required this.phase,
@@ -128,6 +133,7 @@ class GameStatePayload {
     this.peekHoldTargetId,
     this.peekHoldRow,
     this.peekHoldCol,
+    this.awayActionInMs,
   });
 
   Map<String, dynamic> toJson() => {
@@ -150,6 +156,7 @@ class GameStatePayload {
         'peekHoldTargetId': peekHoldTargetId,
         'peekHoldRow': peekHoldRow,
         'peekHoldCol': peekHoldCol,
+        'awayActionInMs': awayActionInMs,
       };
 
   factory GameStatePayload.fromJson(Map<String, dynamic> json) {
@@ -187,6 +194,7 @@ class GameStatePayload {
       peekHoldTargetId: json['peekHoldTargetId'] as String?,
       peekHoldRow: json['peekHoldRow'] as int?,
       peekHoldCol: json['peekHoldCol'] as int?,
+      awayActionInMs: json['awayActionInMs'] as int?,
     );
   }
 }

@@ -7,6 +7,7 @@ import 'package:cabo/core/server_config.dart';
 import 'package:cabo/core/theme/app_theme.dart';
 import 'package:cabo/networking/room_api.dart';
 import 'package:cabo/providers/game_provider.dart';
+import 'package:cabo/networking/seat_store.dart';
 import 'package:cabo/features/rules/rules_sheet.dart';
 
 class HomeScreen extends ConsumerStatefulWidget {
@@ -26,7 +27,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   @override
   void initState() {
     super.initState();
-    // Coming home always gives up any seat, so no ghost players stay at a table.
+    // Coming home closes the connection. A seat in a game is kept for the
+    // player (the game plays for them), and the card below offers a way back.
+    ref.read(reconnectProvider.notifier).stop();
     ref.read(gameClientProvider).disconnect();
     _loadRooms();
     _refreshTimer =
@@ -85,6 +88,59 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     context.go('/lobby');
   }
 
+  /// Back into the game this device left, using its saved seat.
+  void _rejoin() {
+    resetGameSession(ref);
+    ref.read(lobbyErrorProvider.notifier).state = null;
+    ref.read(messageRouterProvider).start();
+    ref.read(reconnectProvider.notifier).start();
+    context.go('/game');
+  }
+
+  Widget _buildRejoinCard(SavedSeat seat) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 24),
+      padding: const EdgeInsets.fromLTRB(16, 12, 4, 12),
+      decoration: BoxDecoration(
+        color: AppColors.highlight.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.highlight.withValues(alpha: 0.5)),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.replay, color: AppColors.highlight),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'You have a game in progress',
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.bold,
+                    color: AppColors.textPrimary,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  'Game ${seat.room.toUpperCase()} · playing as ${seat.name}',
+                  style: const TextStyle(fontSize: 12, color: AppColors.textSecondary),
+                ),
+              ],
+            ),
+          ),
+          ElevatedButton(onPressed: _rejoin, child: const Text('Rejoin')),
+          IconButton(
+            tooltip: 'Forget this game',
+            onPressed: () => ref.read(savedSeatProvider.notifier).clear(),
+            icon: const Icon(Icons.close, size: 18, color: AppColors.textSecondary),
+          ),
+        ],
+      ),
+    );
+  }
+
   void _showError(String msg) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text(msg), backgroundColor: AppColors.danger),
@@ -93,6 +149,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final savedSeat = ref.watch(savedSeatProvider);
     return Scaffold(
       body: WithRulesButton(
           child: Center(
@@ -122,6 +179,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                   ),
                 ),
                 const SizedBox(height: 56),
+
+                if (savedSeat != null) _buildRejoinCard(savedSeat),
 
                 // Name field
                 TextField(

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -71,6 +73,18 @@ class GameScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final reconnect = ref.watch(reconnectProvider);
+    final screen = _screen(context, ref);
+    if (reconnect.status == ReconnectStatus.idle) return screen;
+    return Stack(
+      children: [
+        screen,
+        _ReconnectOverlay(state: reconnect),
+      ],
+    );
+  }
+
+  Widget _screen(BuildContext context, WidgetRef ref) {
     final gameState = ref.watch(gameStateProvider);
     final localPlayer = ref.watch(localPlayerProvider);
     final roundEnd = ref.watch(roundEndProvider);
@@ -102,6 +116,152 @@ class GameScreen extends ConsumerWidget {
     }
 
     return _PlayingScreen(gameState: gameState, localPlayer: localPlayer);
+  }
+}
+
+// ─── Reconnecting ─────────────────────────────────────────────────────────────
+
+/// Covers the table while the app gets the player back into their seat, or
+/// explains why it couldn't.
+class _ReconnectOverlay extends ConsumerWidget {
+  final ReconnectState state;
+
+  const _ReconnectOverlay({required this.state});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final trying = state.status == ReconnectStatus.reconnecting;
+    void goHome() {
+      ref.read(reconnectProvider.notifier).stop();
+      context.go('/');
+    }
+
+    return Positioned.fill(
+      child: Material(
+        color: Colors.black.withValues(alpha: 0.75),
+        child: Center(
+          child: Container(
+            margin: const EdgeInsets.all(24),
+            padding: const EdgeInsets.all(24),
+            constraints: const BoxConstraints(maxWidth: 360),
+            decoration: BoxDecoration(
+              color: AppColors.surface,
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (trying)
+                  const SizedBox(
+                    width: 36,
+                    height: 36,
+                    child: CircularProgressIndicator(color: AppColors.highlight),
+                  )
+                else
+                  Icon(
+                    state.status == ReconnectStatus.replaced
+                        ? Icons.devices
+                        : Icons.wifi_off,
+                    size: 40,
+                    color: AppColors.danger,
+                  ),
+                const SizedBox(height: 16),
+                Text(
+                  trying ? 'Reconnecting…' : "You're out of this game",
+                  style: const TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                    color: AppColors.textPrimary,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  trying
+                      ? 'Your seat and cards are kept for you. If your turn comes '
+                          'up, the game plays it for you after 15 seconds.'
+                      : state.message ?? '',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    fontSize: 13,
+                    height: 1.4,
+                    color: AppColors.textSecondary,
+                  ),
+                ),
+                if (trying && state.attempt > 1) ...[
+                  const SizedBox(height: 6),
+                  Text(
+                    'Attempt ${state.attempt}',
+                    style: const TextStyle(fontSize: 11, color: AppColors.textSecondary),
+                  ),
+                ],
+                const SizedBox(height: 20),
+                trying
+                    ? TextButton(
+                        onPressed: goHome,
+                        child: const Text('Leave and go home'),
+                      )
+                    : ElevatedButton(
+                        onPressed: goHome,
+                        child: const Text('Back to home'),
+                      ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// "Ravi is away — their turn will be played in 12s", counting down.
+class _AwayBanner extends StatefulWidget {
+  final String text;
+  final DateTime deadline;
+
+  const _AwayBanner({required this.text, required this.deadline});
+
+  @override
+  State<_AwayBanner> createState() => _AwayBannerState();
+}
+
+class _AwayBannerState extends State<_AwayBanner> {
+  late final Timer _tick;
+
+  @override
+  void initState() {
+    super.initState();
+    _tick = Timer.periodic(const Duration(milliseconds: 250), (_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _tick.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final left = widget.deadline.difference(DateTime.now());
+    final seconds = (left.inMilliseconds / 1000).ceil().clamp(0, 99);
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      color: AppColors.danger.withValues(alpha: 0.15),
+      child: Row(
+        children: [
+          const Icon(Icons.wifi_off, size: 14, color: AppColors.danger),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              '${widget.text} ${seconds}s',
+              style: const TextStyle(fontSize: 12, color: AppColors.textPrimary),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }
 
@@ -569,6 +729,26 @@ class _PlayingScreenState extends ConsumerState<_PlayingScreen> {
           targetId, row, col, _shownDiscard?['rank'] as String?, _lastTouchUs);
   }
 
+  /// Who the game is waiting for, and what it will do for them.
+  Widget _buildAwayBanner() {
+    final giver = gs.pendingGiveCardAttackerId;
+    final giverAway = giver != null &&
+        (gs.playerById(giver)?['isConnected'] as bool? ?? true) == false;
+    final String text;
+    if (giverAway) {
+      text = '${_playerName(giver)} is away — a card will be given for them in';
+    } else {
+      final name = _playerName(gs.currentPlayerId ?? '');
+      text = gs.turnPhase == 'waitingForDraw'
+          ? '$name is away — their turn will be skipped in'
+          : '$name is away — their card will be discarded in';
+    }
+    return _AwayBanner(
+      text: text,
+      deadline: gs.receivedAt.add(Duration(milliseconds: gs.awayActionInMs!)),
+    );
+  }
+
   String _peekHoldMessage(String actorId, String targetId) {
     final position = gs.peekHoldRow != null && gs.peekHoldCol != null
         ? '${cardPositionName(gs.peekHoldRow!, gs.peekHoldCol!)} '
@@ -769,6 +949,7 @@ class _PlayingScreenState extends ConsumerState<_PlayingScreen> {
                   localPlayerId: myId,
                   onHistoryTap: () => _openHistory(context),
                 ),
+                if (gs.awayActionInMs != null) _buildAwayBanner(),
                 Expanded(child: _buildTable(powerSel)),
                 _buildActionBar(powerSel),
               ],

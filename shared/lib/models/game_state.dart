@@ -65,15 +65,14 @@ class GameState {
 
   /// Get the next active (connected & not eliminated) player in turn order.
   String? getNextPlayerId(String currentId) {
-    final activePlayers =
-        players.where((p) => p.isConnected && !p.isEliminated).toList();
+    // Away players keep their turn; the game plays it for them if they don't return
+    final activePlayers = players.where((p) => !p.isEliminated).toList();
     if (activePlayers.isEmpty) return null;
     final currentIndex = activePlayers.indexWhere((p) => p.id == currentId);
     if (currentIndex == -1) return activePlayers.first.id;
     return activePlayers[(currentIndex + 1) % activePlayers.length].id;
   }
 
-  /// Number of non-eliminated, connected players still in the round.
-  int get activePlayerCount =>
-      players.where((p) => p.isConnected && !p.isEliminated).length;
+  /// Number of players still in the round. Away players keep their seat.
+  int get activePlayerCount => players.where((p) => !p.isEliminated).length;
 }

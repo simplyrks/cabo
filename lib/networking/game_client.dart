@@ -22,6 +22,8 @@ class GameClient {
   void connect(Uri uri) {
     disconnect();
     _channel = WebSocketChannel.connect(uri);
+    // A failed connect also ends the stream below, which is where it's handled
+    _channel!.ready.catchError((_) {});
     _channelSub = _channel!.stream.listen(
       (data) {
         try {
@@ -103,6 +105,11 @@ class GameClient {
 
   void discardDrawn() =>
       send(GameMessage(type: MsgType.discardDrawn, payload: {}));
+
+  void rejoin(String playerId, String seatKey) => send(GameMessage(
+        type: MsgType.rejoin,
+        payload: {'playerId': playerId, 'seatKey': seatKey},
+      ));
 
   void activateSlap() =>
       send(GameMessage(type: MsgType.activateSlap, payload: {}));

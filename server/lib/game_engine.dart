@@ -132,6 +132,13 @@ class GameEngine {
 
   bool confirmInitialPeek(String playerId) {
     _initialPeekDone.add(playerId);
+    return checkInitialPeekReady();
+  }
+
+  /// Starts play once every connected player has seen their cards. Run it again
+  /// when someone leaves, so the table isn't left waiting for them.
+  bool checkInitialPeekReady() {
+    if (state.phase != GamePhase.initialPeek) return false;
     final connectedIds = state.players.where((p) => p.isConnected).map((p) => p.id).toSet();
     if (_initialPeekDone.containsAll(connectedIds)) {
       state.phase = GamePhase.playing;
@@ -189,6 +196,25 @@ class GameEngine {
     state.drawnCard = null;
     _endTurn();
     return handCard; // returned to discard visually
+  }
+
+  // ─── Away players ─────────────────────────────────────────────────────────────
+
+  /// An away player's turn passes without them drawing.
+  void skipTurn(String playerId) {
+    _assertTurn(playerId);
+    _assertTurnPhase(TurnPhase.waitingForDraw);
+    _endTurn();
+  }
+
+  /// An away player's drawn card goes to the discard pile, power unused.
+  CaboCard discardDrawnWithoutPower(String playerId) {
+    _assertTurn(playerId);
+    _assertTurnPhase(TurnPhase.cardDrawn);
+    final card = state.drawnCard!;
+    state.discardPile.add(card);
+    _endTurn();
+    return card;
   }
 
   // ─── Turn: skip power ────────────────────────────────────────────────────────
@@ -559,6 +585,7 @@ class GameEngine {
     String? peekHoldTargetId,
     int? peekHoldRow,
     int? peekHoldCol,
+    int? awayActionInMs,
   }) {
     // At round end reveal ALL cards to everyone
     final revealAll = state.phase == GamePhase.roundEnd;
@@ -587,6 +614,7 @@ class GameEngine {
       peekHoldTargetId: peekHoldTargetId,
       peekHoldRow: peekHoldRow,
       peekHoldCol: peekHoldCol,
+      awayActionInMs: awayActionInMs,
     );
   }
 }

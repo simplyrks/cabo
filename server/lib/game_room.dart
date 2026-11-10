@@ -89,6 +89,23 @@ class GameRoom {
   int? _peekHoldCol;
   Timer? _peekHoldTimer;
 
+  // ─── Rejoining ─────────────────────────────────────────────────────────────────
+  /// Each seated player's secret key. Only that player's device ever gets it, so
+  /// it proves a reconnecting player owns the seat (player ids are public).
+  final Map<String, String> _seatKeys = {};
+  final _random = Random.secure();
+
+  /// How long the table waits for an away player before playing for them.
+  static const _awayGrace = Duration(seconds: 15);
+  Timer? _awayTimer;
+  /// What the away timer is waiting on, e.g. 'turn:<id>:cardDrawn'.
+  String? _awayTimerFor;
+  int _awayDeadlineUs = 0;
+
+  /// With nobody connected mid-game, how long the game is kept for them.
+  static const _abandonAfter = Duration(minutes: 2);
+  Timer? _abandonTimer;
+
   GameRoom({required this.code, required this.onEmpty});
 
   // ─── Lifecycle ────────────────────────────────────────────────────────────────
@@ -139,17 +156,23 @@ class GameRoom {
       return;
     }
     // Nothing happens at the table during a peek hold, slaps included.
-    if (_peekHoldActorId != null && msg.type != MsgType.joinLobby) return;
+    if (_peekHoldActorId != null &&
+        msg.type != MsgType.joinLobby &&
+        msg.type != MsgType.rejoin) {
+      return;
+    }
     // Slaps waiting to be judged go first if this move could change a hand or
     // the discard. Drawing changes neither, so it doesn't cut their wait short.
     if (msg.type != MsgType.matchCard &&
         msg.type != MsgType.joinLobby &&
+        msg.type != MsgType.rejoin &&
         msg.type != MsgType.drawFromPile) {
       _resolveSlaps();
     }
     try {
       switch (msg.type) {
         case MsgType.joinLobby:      _onJoinLobby(ws, msg.payload);
+        case MsgType.rejoin:         _onRejoin(ws, msg.payload);
         case MsgType.startGame:      _onStartGame(ws, msg.payload);
         case MsgType.initialPeekDone: _onInitialPeekDone(ws, msg.payload);
         case MsgType.callCabo:       _onCallCabo(ws, msg.payload);
@@ -179,13 +202,73 @@ class GameRoom {
     final name = payload['name'] as String? ?? 'Player';
     final player = _engine.addPlayer(_newId(), name);
     _sessions[player.id] = ClientSession(playerId: player.id, socket: ws);
+    final seatKey = _newSeatKey();
+    _seatKeys[player.id] = seatKey;
 
     _send(ws, GameMessage(
       type: 'welcome',
-      payload: {'playerId': player.id, 'playerName': player.name, 'roomCode': code},
+      payload: {
+        'playerId': player.id,
+        'playerName': player.name,
+        'roomCode': code,
+        'seatKey': seatKey,
+      },
     ));
     _broadcastLobby();
   }
+
+  /// A player whose connection dropped takes their seat back, proving it's
+  /// theirs with the seat key they were given when they joined.
+  void _onRejoin(WebSocket ws, Map<String, dynamic> payload) {
+    final playerId = payload['playerId'] as String?;
+    final seatKey = payload['seatKey'] as String?;
+    final phase = _engine.state.phase;
+    final inGame = phase == GamePhase.initialPeek || phase == GamePhase.playing;
+    final player = playerId == null ? null : _engine.state.getPlayer(playerId);
+    if (!inGame || player == null || seatKey == null || _seatKeys[playerId] != seatKey) {
+      _send(ws, GameMessage(type: MsgType.rejoinFailed, payload: {
+        'message': inGame
+            ? "Couldn't find your seat at this table."
+            : 'That game has finished.',
+      }));
+      return;
+    }
+
+    // Open somewhere else too: the newest connection takes the seat
+    final old = _sessions.remove(playerId);
+    if (old != null && old.socket != ws) {
+      _send(old.socket, GameMessage(type: MsgType.seatTaken, payload: {
+        'message': 'You opened this game somewhere else.',
+      }));
+      old.socket.close();
+    }
+    _sessions[playerId!] = ClientSession(playerId: playerId, socket: ws);
+    player.isConnected = true;
+    _abandonTimer?.cancel();
+    _abandonTimer = null;
+
+    _send(ws, GameMessage(type: 'welcome', payload: {
+      'playerId': playerId,
+      'playerName': player.name,
+      'roomCode': code,
+      'seatKey': seatKey,
+      'rejoined': true,
+    }));
+    _log('🔌 ${player.name} is back.');
+    _broadcastState();
+    // Still on the memorise screen: show them their bottom cards again
+    if (phase == GamePhase.initialPeek &&
+        !_engine.confirmedPeekIds.contains(playerId)) {
+      for (final peek in _engine.initialPeekCards(playerId)) {
+        _send(ws, GameMessage(type: MsgType.peekReveal, payload: peek.toJson()));
+      }
+    }
+  }
+
+  String _newSeatKey() => [
+        for (var i = 0; i < 16; i++)
+          _random.nextInt(256).toRadixString(16).padLeft(2, '0'),
+      ].join();
 
   void _onStartGame(WebSocket ws, Map<String, dynamic> payload) {
     final session = _sessionFor(ws);
@@ -511,25 +594,27 @@ class GameRoom {
   void _onGiveCard(WebSocket ws, Map<String, dynamic> payload) {
     final session = _sessionFor(ws);
     if (session == null) return;
-    if (_pendingGiveCardAttackerId != session.playerId) return; // not their turn to give
+    _giveCard(session.playerId, payload['row'] as int, payload['col'] as int, ws: ws);
+  }
 
-    final row = payload['row'] as int;
-    final col = payload['col'] as int;
+  void _giveCard(String playerId, int row, int col, {WebSocket? ws}) {
+    if (_pendingGiveCardAttackerId != playerId) return; // not their turn to give
+
     final targetId = _pendingGiveCardTargetId!;
-    final attackerName = _nameOf(session.playerId);
+    final attackerName = _nameOf(playerId);
     final targetName = _nameOf(targetId);
 
     try {
-      final landed = _engine.giveCard(session.playerId, targetId, row, col);
+      final landed = _engine.giveCard(playerId, targetId, row, col);
       _log('$attackerName gave a card to $targetName.');
       _animate(TableAnimationPayload(moves: [
         CardMove(
-          from: CardSpot.inHand(session.playerId, row, col),
+          from: CardSpot.inHand(playerId, row, col),
           to: CardSpot.inHand(targetId, landed.$1, landed.$2),
         ),
       ]));
     } catch (e) {
-      _sendError(ws, e.toString());
+      if (ws != null) _sendError(ws, e.toString());
       return;
     }
 
@@ -834,7 +919,8 @@ class GameRoom {
   void _handleDisconnect(WebSocket ws) {
     _connections.remove(ws);
     _removeSession(ws);
-    if (_connections.isEmpty) onEmpty(this);
+    // A game everyone dropped out of is kept for a while, in case they come back
+    if (_connections.isEmpty && _abandonTimer == null) onEmpty(this);
   }
 
   void _removeSession(WebSocket ws) {
@@ -843,25 +929,154 @@ class GameRoom {
     final name = _nameOf(session.playerId);
     _sessions.remove(session.playerId);
     _engine.removePlayer(session.playerId);
+    final inLobby = _engine.state.phase == GamePhase.lobby;
     print('[Room $code] $name disconnected');
-    _log('$name disconnected.');
+    if (inLobby) {
+      _seatKeys.remove(session.playerId);
+      _log('$name disconnected.');
+    } else {
+      _log('📵 $name lost connection — their seat is kept for them.');
+    }
 
-    // If no one is seated anymore, reset to a fresh lobby so new players can join.
     if (_sessions.isEmpty) {
-      _engine = GameEngine();
-      _actionLog.clear();
-      _closeMatchWindow();
-      _pendingGiveCardAttackerId = null;
-      _pendingGiveCardTargetId = null;
-      _clearPeekHold();
-      _clearSlaps();
-      print('[Room $code] All players disconnected — reset to lobby.');
+      if (inLobby) {
+        _resetTable();
+        print('[Room $code] All players disconnected — reset to lobby.');
+      } else {
+        // Mid-game: give everyone a chance to come back before giving up
+        _abandonTimer ??= Timer(_abandonAfter, _abandonGame);
+        print('[Room $code] All players disconnected — keeping the game for '
+            '${_abandonAfter.inMinutes} minutes.');
+      }
       return;
     }
 
-    if (_engine.state.phase == GamePhase.lobby) {
+    if (inLobby) {
       _broadcastLobby();
     } else {
+      // Don't keep the memorise screen waiting for someone who has gone
+      if (_engine.checkInitialPeekReady()) {
+        _log("Everyone's ready — let's play! ${_nameOf(_engine.state.currentPlayerId!)} goes first.");
+      }
+      _broadcastState();
+    }
+  }
+
+  /// Back to an empty lobby, forgetting the game and every seat.
+  void _resetTable() {
+    _engine = GameEngine();
+    _actionLog.clear();
+    _closeMatchWindow();
+    _pendingGiveCardAttackerId = null;
+    _pendingGiveCardTargetId = null;
+    _clearPeekHold();
+    _clearSlaps();
+    _cancelSlapCountdown();
+    _awayTimer?.cancel();
+    _awayTimer = null;
+    _awayTimerFor = null;
+    _abandonTimer?.cancel();
+    _abandonTimer = null;
+    _seatKeys.clear();
+  }
+
+  void _abandonGame() {
+    _abandonTimer = null;
+    if (_sessions.isNotEmpty) return;
+    print('[Room $code] Nobody came back — reset to lobby.');
+    _resetTable();
+    if (_connections.isEmpty) onEmpty(this);
+  }
+
+  // ─── Away players ─────────────────────────────────────────────────────────────
+
+  /// What the game is waiting on from a player who is away, if anything.
+  String? _awayWaitingOn() {
+    final state = _engine.state;
+    if (state.phase != GamePhase.playing || _peekHoldActorId != null) return null;
+    final giver = _pendingGiveCardAttackerId;
+    if (giver != null && !(state.getPlayer(giver)?.isConnected ?? true)) {
+      return 'give:$giver';
+    }
+    final current = state.currentPlayerId;
+    final player = current == null ? null : state.getPlayer(current);
+    if (player == null || player.isConnected || player.isEliminated) return null;
+    return 'turn:$current:${state.turnPhase.name}';
+  }
+
+  /// Starts, keeps or stops the countdown to playing for an away player.
+  void _scheduleAway() {
+    final waitingOn = _awayWaitingOn();
+    if (waitingOn == _awayTimerFor) return;
+    _awayTimer?.cancel();
+    _awayTimer = null;
+    _awayTimerFor = waitingOn;
+    if (waitingOn == null) return;
+    _awayDeadlineUs = _clock.elapsedMicroseconds + _awayGrace.inMicroseconds;
+    _awayTimer = Timer(_awayGrace, () => _playForAway(waitingOn));
+  }
+
+  int? get _awayActionInMs => _awayTimerFor == null
+      ? null
+      : max(0, (_awayDeadlineUs - _clock.elapsedMicroseconds) ~/ 1000);
+
+  /// The away player didn't come back in time, so the game makes their move:
+  /// skip the turn, discard a drawn card with no power, or give a random card.
+  void _playForAway(String waitingOn) {
+    _awayTimer = null;
+    _awayTimerFor = null;
+    if (_awayWaitingOn() != waitingOn) {
+      _broadcastState(); // things moved on; schedule whatever comes next
+      return;
+    }
+    _resolveSlaps();
+    final parts = waitingOn.split(':');
+    final playerId = parts[1];
+    final name = _nameOf(playerId);
+    try {
+      if (parts[0] == 'give') {
+        final slot = _engine.randomOccupiedSlot(playerId);
+        if (slot == null) {
+          _pendingGiveCardAttackerId = null;
+          _pendingGiveCardTargetId = null;
+          _broadcastState();
+          return;
+        }
+        _log('⏭ $name is away — a random card was given for them.');
+        _giveCard(playerId, slot.$1, slot.$2);
+        return;
+      }
+      switch (_engine.state.turnPhase) {
+        case TurnPhase.waitingForDraw:
+          _engine.skipTurn(playerId);
+          _log('⏭ $name is away — turn skipped.');
+          _broadcastState();
+          _checkRoundEnd();
+        case TurnPhase.cardDrawn:
+          _cancelSlapCountdown();
+          final card = _engine.discardDrawnWithoutPower(playerId);
+          _log('⏭ $name is away — discarded ${_cardLabel(card.rank.name, card.suit.name)}, power not used.');
+          _animate(TableAnimationPayload(moves: [
+            CardMove(
+              from: CardSpot.heldBy(playerId),
+              to: const CardSpot.discardPile(),
+              card: card,
+            ),
+          ]));
+          _broadcastState();
+          _checkRoundEnd();
+          if (_engine.state.phase != GamePhase.roundEnd) _openMatchWindow();
+        case TurnPhase.usingPower:
+          _engine.skipPower(playerId);
+          _log('⏭ $name is away — power skipped.');
+          _broadcastState();
+          _checkRoundEnd();
+          _openMatchWindow();
+        default:
+          break; // other phases aren't used by the game
+      }
+    } catch (e) {
+      print('[Room $code] Could not play for $name: $e');
       _broadcastState();
     }
   }
@@ -887,6 +1102,7 @@ class GameRoom {
       // Everyone has to re-join to sit at the next round. Sockets stay open so
       // "Play Again" keeps them at this table.
       _sessions.clear();
+      _seatKeys.clear();
     }
   }
 
@@ -943,6 +1159,8 @@ class GameRoom {
   }
 
   void _broadcastState() {
+    _scheduleAway();
+    final awayActionInMs = _awayActionInMs;
     for (final session in _sessions.values) {
       final statePayload = _engine.buildStateFor(
         session.playerId,
@@ -953,6 +1171,7 @@ class GameRoom {
         peekHoldTargetId: _peekHoldTargetId,
         peekHoldRow: _peekHoldRow,
         peekHoldCol: _peekHoldCol,
+        awayActionInMs: awayActionInMs,
         // Closed for anyone who has already used their attempt on this card.
         matchWindowOpen:
             _matchWindowOpen && !_slapAttemptedIds.contains(session.playerId),
