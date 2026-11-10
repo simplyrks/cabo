@@ -1386,24 +1386,36 @@ class _PlayingScreenState extends ConsumerState<_PlayingScreen> {
                     style: TextStyle(color: AppColors.textSecondary, fontSize: 11),
                   ),
                   const SizedBox(height: 6),
-                  ElevatedButton(
-                    onPressed: () {
-                      final card = gs.drawnCard;
-                      if (card != null) {
-                        _initPowerStep(
-                          card['rank'] as String? ?? '',
-                          card['suit'] as String? ?? '',
-                        );
-                      }
-                      ref.read(gameClientProvider).discardDrawn();
-                    },
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: AppColors.surface,
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                      minimumSize: Size.zero,
-                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  SizedBox.fromSize(
+                    size: _drawnActionSize,
+                    child: ElevatedButton(
+                      onPressed: () {
+                        final card = gs.drawnCard;
+                        if (card != null) {
+                          _initPowerStep(
+                            card['rank'] as String? ?? '',
+                            card['suit'] as String? ?? '',
+                          );
+                        }
+                        ref.read(gameClientProvider).discardDrawn();
+                      },
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppColors.surface,
+                        padding: EdgeInsets.zero,
+                        minimumSize: Size.zero,
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(_drawnActionSize.height / 2),
+                          side: BorderSide(
+                            color: AppColors.textSecondary.withValues(alpha: 0.25),
+                          ),
+                        ),
+                      ),
+                      child: const Text(
+                        'Discard & use power',
+                        style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
+                      ),
                     ),
-                    child: const Text('Discard & use power', style: TextStyle(fontSize: 12)),
                   ),
                   const SizedBox(height: 8),
                   _buildSwapSlapSwitch(),
@@ -1415,6 +1427,9 @@ class _PlayingScreenState extends ConsumerState<_PlayingScreen> {
       ),
     );
   }
+
+  /// The discard button and the swap/slap switch share one size.
+  static const _drawnActionSize = Size(184, 40);
 
   /// What a tap on my own card does while I hold a drawn card: swap or slap.
   Widget _buildSwapSlapSwitch() {
@@ -1429,25 +1444,27 @@ class _PlayingScreenState extends ConsumerState<_PlayingScreen> {
     }
 
     Widget option(String label, bool selected, Color color, VoidCallback? onTap) {
-      return GestureDetector(
-        onTap: onTap,
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 150),
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-          decoration: BoxDecoration(
-            color: selected ? color : Colors.transparent,
-            borderRadius: BorderRadius.circular(16),
-          ),
-          child: Text(
-            label,
-            style: TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.bold,
-              color: selected
-                  ? Colors.white
-                  : onTap == null
-                      ? AppColors.textSecondary.withValues(alpha: 0.4)
-                      : AppColors.textSecondary,
+      return Expanded(
+        child: GestureDetector(
+          onTap: onTap,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 150),
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: selected ? color : Colors.transparent,
+              borderRadius: BorderRadius.circular(_drawnActionSize.height / 2),
+            ),
+            child: Text(
+              label,
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.bold,
+                color: selected
+                    ? Colors.white
+                    : onTap == null
+                        ? AppColors.textSecondary.withValues(alpha: 0.4)
+                        : AppColors.textSecondary,
+              ),
             ),
           ),
         ),
@@ -1459,14 +1476,15 @@ class _PlayingScreenState extends ConsumerState<_PlayingScreen> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Container(
-          padding: const EdgeInsets.all(2),
+          width: _drawnActionSize.width,
+          height: _drawnActionSize.height,
+          padding: const EdgeInsets.all(3),
           decoration: BoxDecoration(
             color: AppColors.background,
-            borderRadius: BorderRadius.circular(18),
+            borderRadius: BorderRadius.circular(_drawnActionSize.height / 2),
             border: Border.all(color: AppColors.textSecondary.withValues(alpha: 0.25)),
           ),
           child: Row(
-            mainAxisSize: MainAxisSize.min,
             children: [
               option('SWAP', !_slapMode, AppColors.highlight,
                   () => setState(() => _slapMode = false)),
