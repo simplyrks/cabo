@@ -18,7 +18,7 @@ void main() {
       await tester.tap(find.byTooltip('How to play'));
       await tester.pumpAndSettle();
       expect(find.text('How to play'), findsOneWidget);
-      expect(find.textContaining('fewest cards'), findsWidgets);
+      expect(find.textContaining('lowest total points'), findsWidgets);
 
       for (final tab in ['Powers', 'Slapping', 'Winning', 'Basics']) {
         await tester.tap(find.text(tab));

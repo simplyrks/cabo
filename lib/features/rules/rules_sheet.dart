@@ -143,8 +143,8 @@ class _BasicsTab extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return const _TabBody(children: [
-      _Lead('Finish the round with the fewest cards — and if that\'s a tie, '
-          'the lowest total. Memory and quick hands win.'),
+      _Lead('Finish the round with the lowest total points in your hand. '
+          'Memory and quick hands win.'),
       _Heading('Setting up'),
       _Bullet('Everyone gets 4 cards face down, in two rows of two.'),
       _Bullet(
@@ -280,8 +280,8 @@ class _WinningTab extends StatelessWidget {
       _Bullet(
           'Only one player is left because everyone else has been eliminated.'),
       _Heading('Who wins'),
-      _Step(1, 'The player with the fewest cards wins.'),
-      _Step(2, 'If that\'s a tie, the lowest total value wins.'),
+      _Step(1, 'The player with the lowest total points wins.'),
+      _Step(2, 'If points are tied, the player with fewer cards wins.'),
       _Step(3, 'Eliminated players always finish last.'),
       _Heading('Tips'),
       _Bullet('Low cards to keep: Black Kings (0), Aces (1), 2s.'),
@@ -290,7 +290,7 @@ class _WinningTab extends StatelessWidget {
       _Bullet(
           'Watch the glowing spots — a swapped card you remembered isn\'t the same card any more.'),
       _Bullet(
-          'Slapping is the fastest way to lose cards, but a wrong guess costs you one.'),
+          'Slapping gets rid of a card and all its points, but a wrong guess adds a card.'),
     ]);
   }
 }

@@ -432,7 +432,7 @@ class GameEngine {
       );
     }).toList();
 
-    // Eliminated players sort to the bottom; among active players: fewest cards then lowest total
+    // Eliminated players sort to the bottom; among active players: lowest total, then fewest cards
     final eliminatedIds = state.players
         .where((p) => p.isEliminated)
         .map((p) => p.id)
@@ -442,8 +442,8 @@ class GameEngine {
       final aElim = eliminatedIds.contains(a.playerId);
       final bElim = eliminatedIds.contains(b.playerId);
       if (aElim != bElim) return aElim ? 1 : -1;
-      if (a.cardCount != b.cardCount) return a.cardCount.compareTo(b.cardCount);
-      return a.totalValue.compareTo(b.totalValue);
+      if (a.totalValue != b.totalValue) return a.totalValue.compareTo(b.totalValue);
+      return a.cardCount.compareTo(b.cardCount);
     });
 
     final winner = scores.first;
