@@ -11,6 +11,7 @@ import 'widgets/slap_ranking.dart';
 import 'widgets/slap_status.dart';
 import 'widgets/status_box.dart' show StatusBox, HistorySheet;
 import 'widgets/table_animations.dart';
+import 'package:cabo/features/rules/rules_sheet.dart';
 
 // ─── Power selection state ────────────────────────────────────────────────────
 
@@ -145,7 +146,7 @@ class _InitialPeekScreenState extends ConsumerState<_InitialPeekScreen> {
     final bottomCards = _getBottomCards(myData);
 
     return Scaffold(
-      body: SafeArea(
+      body: WithRulesButton(child: SafeArea(
         child: Center(
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
@@ -192,7 +193,7 @@ class _InitialPeekScreenState extends ConsumerState<_InitialPeekScreen> {
             ),
           ),
         ),
-      ),
+      )),
     );
   }
 }
@@ -1870,7 +1871,7 @@ class _RoundEndScreen extends ConsumerWidget {
         : gameState.playerById(gameState.caboCallerId!);
 
     return Scaffold(
-      body: SafeArea(
+      body: WithRulesButton(child: SafeArea(
         child: Stack(
           children: [
             Column(
@@ -1969,7 +1970,7 @@ class _RoundEndScreen extends ConsumerWidget {
               ),
           ],
         ),
-      ),
+      )),
     );
   }
 }

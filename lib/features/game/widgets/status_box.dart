@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:cabo/core/theme/app_theme.dart';
 import 'package:cabo/providers/game_provider.dart';
+import 'package:cabo/features/rules/rules_sheet.dart';
 
 /// Compact single-line status bar. Tap the history icon to see the full log.
 class StatusBox extends StatelessWidget {
@@ -87,6 +88,10 @@ class StatusBox extends StatelessWidget {
               ),
             ),
           ],
+
+          // Rules
+          const RulesButton(compact: true),
+          const SizedBox(width: 6),
 
           // History icon button
           GestureDetector(

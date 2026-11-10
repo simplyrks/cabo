@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 import 'package:cabo/core/theme/app_theme.dart';
 import 'package:cabo/providers/game_provider.dart';
 import 'package:cabo_shared/models/messages.dart';
+import 'package:cabo/features/rules/rules_sheet.dart';
 
 class ResultsScreen extends ConsumerWidget {
   const ResultsScreen({super.key});
@@ -14,7 +15,8 @@ class ResultsScreen extends ConsumerWidget {
 
     if (roundEnd == null) {
       return const Scaffold(
-        body: Center(child: CircularProgressIndicator(color: AppColors.highlight)),
+        body: Center(
+            child: CircularProgressIndicator(color: AppColors.highlight)),
       );
     }
 
@@ -23,7 +25,8 @@ class ResultsScreen extends ConsumerWidget {
     final iWon = localPlayer?.id == winner.playerId;
 
     return Scaffold(
-      body: SafeArea(
+      body: WithRulesButton(
+          child: SafeArea(
         child: Center(
           child: Padding(
             padding: const EdgeInsets.all(32),
@@ -41,7 +44,8 @@ class ResultsScreen extends ConsumerWidget {
                 const SizedBox(height: 8),
                 const Text(
                   'Round Over',
-                  style: TextStyle(color: AppColors.textSecondary, fontSize: 16),
+                  style:
+                      TextStyle(color: AppColors.textSecondary, fontSize: 16),
                 ),
                 const SizedBox(height: 40),
 
@@ -64,7 +68,7 @@ class ResultsScreen extends ConsumerWidget {
             ),
           ),
         ),
-      ),
+      )),
     );
   }
 }
@@ -135,7 +139,8 @@ class _ScoreRow extends StatelessWidget {
                 '${score.totalValue} pts',
                 style: TextStyle(
                   fontWeight: FontWeight.bold,
-                  color: score.isWinner ? AppColors.gold : AppColors.textPrimary,
+                  color:
+                      score.isWinner ? AppColors.gold : AppColors.textPrimary,
                 ),
               ),
               Text(

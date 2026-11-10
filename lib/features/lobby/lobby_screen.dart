@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:cabo/core/theme/app_theme.dart';
 import 'package:cabo/providers/game_provider.dart';
+import 'package:cabo/features/rules/rules_sheet.dart';
 
 class LobbyScreen extends ConsumerWidget {
   const LobbyScreen({super.key});
@@ -46,6 +47,7 @@ class LobbyScreen extends ConsumerWidget {
           icon: const Icon(Icons.arrow_back, color: AppColors.textSecondary),
           onPressed: () => context.go('/'),
         ),
+        actions: const [RulesButton()],
       ),
       body: Center(
         child: ConstrainedBox(

@@ -7,6 +7,7 @@ import 'package:cabo/core/server_config.dart';
 import 'package:cabo/core/theme/app_theme.dart';
 import 'package:cabo/networking/room_api.dart';
 import 'package:cabo/providers/game_provider.dart';
+import 'package:cabo/features/rules/rules_sheet.dart';
 
 class HomeScreen extends ConsumerStatefulWidget {
   const HomeScreen({super.key});
@@ -93,7 +94,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: Center(
+      body: WithRulesButton(
+          child: Center(
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(32),
           child: ConstrainedBox(
@@ -184,14 +186,15 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
             ),
           ),
         ),
-      ),
+      )),
     );
   }
 
   Widget _buildRoomList() {
     final rooms = _rooms;
     if (_roomsFailed) {
-      return const _RoomListMessage('Could not reach the game server. Retrying...');
+      return const _RoomListMessage(
+          'Could not reach the game server. Retrying...');
     }
     if (rooms == null) {
       return const CircularProgressIndicator(color: AppColors.highlight);
