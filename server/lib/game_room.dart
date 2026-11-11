@@ -68,7 +68,13 @@ class GameRoom {
   int _slapCardNo = 0;
   /// Counting down to a slap window the current player asked for.
   Timer? _slapCountdownTimer;
+  int _slapCountdownEndsUs = 0;
   static const _slapCountdown = Duration(seconds: 3);
+  /// The current player discarded a power card with "slap first": everyone
+  /// gets to slap it before they start the power.
+  bool _slapBeforePower = false;
+  /// That slap has had its turn, so the window doesn't reopen after the power.
+  bool _skipReopenAfterPower = false;
   int _windowOpenedAtUs = 0;
   /// A correct slap has taken the current card.
   bool _slapTaken = false;
@@ -184,6 +190,7 @@ class GameRoom {
         case MsgType.matchCard:      _onMatchCard(ws, msg.payload);
         case MsgType.giveCard:       _onGiveCard(ws, msg.payload);
         case MsgType.activateSlap:   _onActivateSlap(ws);
+        case MsgType.startPower:     _onStartPower(ws);
         default: _sendError(ws, 'Unknown message type: ${msg.type}');
       }
     } catch (e) {
@@ -352,10 +359,9 @@ class GameRoom {
       _sendError(ws, 'There is nothing to slap yet');
       return;
     }
-    final name = _nameOf(playerId);
     final canSlapNow = _matchWindowOpen && !_slapAttemptedIds.contains(playerId);
     if (canSlapNow) {
-      _log('🖐 $name is going to slap!');
+      // Everyone can see whose turn it is, so the banner and log name nobody
       _broadcast(GameMessage(
         type: MsgType.slapActivated,
         payload: SlapActivatedPayload(playerId: playerId).toJson(),
@@ -363,7 +369,13 @@ class GameRoom {
       _broadcastState();
       return;
     }
-    _log('🖐 $name turned slapping on — it opens for everyone in 3 seconds.');
+    _startSlapCountdown(playerId);
+  }
+
+  /// A 3-2-1 for everyone, then the slap window opens on the top discard.
+  void _startSlapCountdown(String playerId) {
+    _cancelSlapCountdown();
+    _log('🖐 Slapping opens for everyone in 3 seconds.');
     _broadcast(GameMessage(
       type: MsgType.slapActivated,
       payload: SlapActivatedPayload(
@@ -371,11 +383,13 @@ class GameRoom {
         countdownMs: _slapCountdown.inMilliseconds,
       ).toJson(),
     ));
-    _broadcastState();
+    _slapCountdownEndsUs =
+        _clock.elapsedMicroseconds + _slapCountdown.inMicroseconds;
     _slapCountdownTimer = Timer(_slapCountdown, () {
       _slapCountdownTimer = null;
       _openMatchWindow();
     });
+    _broadcastState();
   }
 
   /// The held card has been dealt with, so a slap countdown is no longer needed:
@@ -383,6 +397,55 @@ class GameRoom {
   void _cancelSlapCountdown() {
     _slapCountdownTimer?.cancel();
     _slapCountdownTimer = null;
+  }
+
+  int? get _slapOpensInMs => _slapCountdownTimer == null
+      ? null
+      : max(0, (_slapCountdownEndsUs - _clock.elapsedMicroseconds) ~/ 1000);
+
+  /// The player who chose "slap first" is ready for their power: slapping
+  /// closes until the power is done, and doesn't reopen on the same card.
+  /// False while the countdown is still running.
+  bool _beginPower() {
+    if (!_slapBeforePower) return true;
+    if (_slapCountdownTimer != null) return false;
+    _slapBeforePower = false;
+    _skipReopenAfterPower = true;
+    _closeMatchWindow();
+    return true;
+  }
+
+  /// The power is finished. The slap window opens on its card, unless that
+  /// card already had its window before the power.
+  void _openMatchWindowAfterPower() {
+    if (_skipReopenAfterPower) {
+      _skipReopenAfterPower = false;
+      return;
+    }
+    _openMatchWindow();
+  }
+
+  void _clearSlapFirst() {
+    _slapBeforePower = false;
+    _skipReopenAfterPower = false;
+  }
+
+  /// The power player is ready to use their power after the slap window.
+  void _onStartPower(WebSocket ws) {
+    final session = _sessionFor(ws);
+    if (session == null) return;
+    final state = _engine.state;
+    if (state.currentPlayerId != session.playerId ||
+        state.turnPhase != TurnPhase.usingPower ||
+        !_slapBeforePower) {
+      return;
+    }
+    if (!_beginPower()) {
+      _sendError(ws, 'Slapping opens first — wait for the countdown.');
+      return;
+    }
+    _log('${_nameOf(session.playerId)} is using their power — slapping is closed.');
+    _broadcastState();
   }
 
   void _onDiscardDrawn(WebSocket ws, Map<String, dynamic> payload) {
@@ -398,13 +461,24 @@ class GameRoom {
     // For Jack: the skipped player is whoever was next before we advance
     final wouldBeNextId = _engine.state.getNextPlayerId(session.playerId);
 
+    // "Discard, slap, then power": a 3-2-1 for everyone, a slap window on the
+    // discarded card, and only then the power.
+    final slapFirst = payload['slapFirst'] == true;
+
     _engine.discardDrawn(session.playerId);
     _cancelSlapCountdown();
+    _clearSlapFirst();
+    final hasPower = _engine.state.turnPhase == TurnPhase.usingPower;
 
-    // Using a power is the one time slapping stops.
-    if (_engine.state.turnPhase == TurnPhase.usingPower) _closeMatchWindow();
+    // Using a power is the one time slapping stops. With "slap first" the old
+    // card's window closes too, and the countdown opens one for this card.
+    if (hasPower || slapFirst) _closeMatchWindow();
+    if (hasPower && slapFirst) _slapBeforePower = true;
 
-    if (_engine.state.turnPhase == TurnPhase.usingPower) {
+    if (hasPower && slapFirst) {
+      final powerDesc = _powerDescription(drawnRank);
+      _log('$name discarded $cardName — everyone can slap it, then the $powerDesc.');
+    } else if (hasPower) {
       final powerDesc = _powerDescription(drawnRank);
       _log('$name discarded $cardName — $powerDesc activated!');
     } else if (drawnRank == 'jack') {
@@ -428,8 +502,13 @@ class GameRoom {
     ));
     _broadcastState();
     _checkRoundEnd();
-    // A power card's slap window waits until the power is finished.
-    if (_engine.state.turnPhase != TurnPhase.usingPower) _openMatchWindow();
+    if (_engine.state.phase != GamePhase.playing) return;
+    if (slapFirst) {
+      _startSlapCountdown(session.playerId);
+    } else if (!hasPower) {
+      // A power card's slap window waits until the power is finished.
+      _openMatchWindow();
+    }
   }
 
   void _onSwapDrawnWithHand(WebSocket ws, Map<String, dynamic> payload) {
@@ -440,6 +519,7 @@ class GameRoom {
     final col = payload['col'] as int;
     final handCard = _engine.swapDrawnWithHand(session.playerId, row, col);
     _cancelSlapCountdown();
+    _clearSlapFirst();
     _log('$name swapped their ${cardPositionName(row, col)} card.');
     // Everyone sees which position it was: the card lifts and glows, face down,
     // then flips face up on its way to the discard pile as the drawn card takes its place.
@@ -471,9 +551,19 @@ class GameRoom {
     final name = _nameOf(session.playerId);
     _engine.skipPower(session.playerId);
     _log('$name skipped their power. Next: ${_nameOf(_engine.state.currentPlayerId!)}\'s turn.');
+    _afterSkippedPower();
+  }
+
+  /// The power was skipped. A "slap first" window stays as it is (or opens
+  /// when its countdown ends); otherwise slapping opens now.
+  void _afterSkippedPower() {
+    // Still in the "slap first" window, or past it: either way this card has
+    // its window already
+    final reopen = !_slapBeforePower && !_skipReopenAfterPower;
+    _clearSlapFirst();
     _broadcastState();
     _checkRoundEnd();
-    _openMatchWindow();
+    if (reopen) _openMatchWindow();
   }
 
   void _onUsePower(WebSocket ws, Map<String, dynamic> payload) {
@@ -482,6 +572,10 @@ class GameRoom {
     final pid = session.playerId;
     final name = _nameOf(pid);
     final action = payload['action'] as String;
+    if (_engine.state.currentPlayerId == pid && !_beginPower()) {
+      _sendError(ws, 'Slapping opens first — wait for the countdown.');
+      return;
+    }
 
     switch (action) {
       case 'peekOwn':
@@ -560,7 +654,7 @@ class GameRoom {
 
     _broadcastState();
     _checkRoundEnd();
-    _openMatchWindow();
+    _openMatchWindowAfterPower();
   }
 
   /// Hold the whole table while the peeked card is on screen. The turn stays
@@ -579,7 +673,7 @@ class GameRoom {
     _engine.finishPeek();
     _broadcastState();
     _checkRoundEnd();
-    _openMatchWindow();
+    _openMatchWindowAfterPower();
   }
 
   void _clearPeekHold() {
@@ -972,6 +1066,7 @@ class GameRoom {
     _clearPeekHold();
     _clearSlaps();
     _cancelSlapCountdown();
+    _clearSlapFirst();
     _awayTimer?.cancel();
     _awayTimer = null;
     _awayTimerFor = null;
@@ -1054,6 +1149,7 @@ class GameRoom {
           _checkRoundEnd();
         case TurnPhase.cardDrawn:
           _cancelSlapCountdown();
+          _clearSlapFirst();
           final card = _engine.discardDrawnWithoutPower(playerId);
           _log('⏭ $name is away — discarded ${_cardLabel(card.rank.name, card.suit.name)}, power not used.');
           _animate(TableAnimationPayload(moves: [
@@ -1069,9 +1165,7 @@ class GameRoom {
         case TurnPhase.usingPower:
           _engine.skipPower(playerId);
           _log('⏭ $name is away — power skipped.');
-          _broadcastState();
-          _checkRoundEnd();
-          _openMatchWindow();
+          _afterSkippedPower();
         default:
           break; // other phases aren't used by the game
       }
@@ -1094,6 +1188,8 @@ class GameRoom {
       final payload = RoundEndPayload(scores: scores, winnerId: winner.playerId);
       _broadcast(GameMessage(type: MsgType.roundEnd, payload: payload.toJson()));
       _closeMatchWindow();
+      _cancelSlapCountdown();
+      _clearSlapFirst();
       _pendingGiveCardAttackerId = null;
       _pendingGiveCardTargetId = null;
       _clearSlaps();
@@ -1161,6 +1257,7 @@ class GameRoom {
   void _broadcastState() {
     _scheduleAway();
     final awayActionInMs = _awayActionInMs;
+    final slapOpensInMs = _slapOpensInMs;
     for (final session in _sessions.values) {
       final statePayload = _engine.buildStateFor(
         session.playerId,
@@ -1172,6 +1269,8 @@ class GameRoom {
         peekHoldRow: _peekHoldRow,
         peekHoldCol: _peekHoldCol,
         awayActionInMs: awayActionInMs,
+        slapBeforePower: _slapBeforePower,
+        slapOpensInMs: slapOpensInMs,
         // Closed for anyone who has already used their attempt on this card.
         matchWindowOpen:
             _matchWindowOpen && !_slapAttemptedIds.contains(session.playerId),

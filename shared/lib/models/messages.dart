@@ -23,6 +23,7 @@ class MsgType {
   static const initialPeekDone = 'initialPeekDone';
   static const clockPing = 'clockPing'; // measures the gap to the server clock
   static const activateSlap = 'activateSlap'; // current player wants to slap mid-turn
+  static const startPower = 'startPower'; // done letting everyone slap; power begins
   static const rejoin = 'rejoin'; // take back a seat after a dropped connection
 
   // Server → Client
@@ -112,6 +113,11 @@ class GameStatePayload {
   final int? peekHoldCol;
   /// The current player is away: how long until the game plays for them.
   final int? awayActionInMs;
+  /// The current player discarded a power card and is letting everyone slap
+  /// it before they use the power.
+  final bool slapBeforePower;
+  /// A 3-2-1 is running: how long until slapping opens.
+  final int? slapOpensInMs;
 
   const GameStatePayload({
     required this.phase,
@@ -134,6 +140,8 @@ class GameStatePayload {
     this.peekHoldRow,
     this.peekHoldCol,
     this.awayActionInMs,
+    this.slapBeforePower = false,
+    this.slapOpensInMs,
   });
 
   Map<String, dynamic> toJson() => {
@@ -157,6 +165,8 @@ class GameStatePayload {
         'peekHoldRow': peekHoldRow,
         'peekHoldCol': peekHoldCol,
         'awayActionInMs': awayActionInMs,
+        'slapBeforePower': slapBeforePower,
+        'slapOpensInMs': slapOpensInMs,
       };
 
   factory GameStatePayload.fromJson(Map<String, dynamic> json) {
@@ -195,6 +205,8 @@ class GameStatePayload {
       peekHoldRow: json['peekHoldRow'] as int?,
       peekHoldCol: json['peekHoldCol'] as int?,
       awayActionInMs: json['awayActionInMs'] as int?,
+      slapBeforePower: json['slapBeforePower'] as bool? ?? false,
+      slapOpensInMs: json['slapOpensInMs'] as int?,
     );
   }
 }

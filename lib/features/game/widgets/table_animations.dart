@@ -643,16 +643,14 @@ class _CaboSplashState extends State<CaboSplash>
 }
 
 /// A banner across the table when the current player switches to slapping,
-/// counting down to the moment slapping opens for everyone.
+/// counting down to the moment slapping opens for everyone. It names nobody:
+/// everyone can see whose turn it is.
 class SlapBanner extends StatefulWidget {
-  /// "Alice" or "You"
-  final String name;
   final Duration countdown;
   final VoidCallback onDone;
 
   const SlapBanner({
     super.key,
-    required this.name,
     required this.countdown,
     required this.onDone,
   });
@@ -690,7 +688,6 @@ class _SlapBannerState extends State<SlapBanner>
 
   @override
   Widget build(BuildContext context) {
-    final verb = widget.name == 'You' ? 'are' : 'is';
     return Positioned.fill(
       child: IgnorePointer(
         child: Align(
@@ -704,10 +701,10 @@ class _SlapBannerState extends State<SlapBanner>
               final String small;
               if (widget.countdown == Duration.zero) {
                 big = 'SLAP!';
-                small = '${widget.name} $verb slapping';
+                small = 'Slap is on';
               } else if (leftMs > 0) {
                 big = '${(leftMs / 1000).ceil()}';
-                small = '${widget.name} turned slap on — get ready';
+                small = 'Slapping is starting — get ready';
               } else {
                 big = 'SLAP!';
                 small = 'Slapping is open for everyone';

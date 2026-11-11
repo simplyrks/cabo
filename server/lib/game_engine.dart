@@ -586,6 +586,8 @@ class GameEngine {
     int? peekHoldRow,
     int? peekHoldCol,
     int? awayActionInMs,
+    bool slapBeforePower = false,
+    int? slapOpensInMs,
   }) {
     // At round end reveal ALL cards to everyone
     final revealAll = state.phase == GamePhase.roundEnd;
@@ -615,6 +617,8 @@ class GameEngine {
       peekHoldRow: peekHoldRow,
       peekHoldCol: peekHoldCol,
       awayActionInMs: awayActionInMs,
+      slapBeforePower: slapBeforePower,
+      slapOpensInMs: slapOpensInMs,
     );
   }
 }

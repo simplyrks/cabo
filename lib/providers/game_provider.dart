@@ -222,6 +222,10 @@ class GameStateModel {
   final int? peekHoldCol;
   /// The current player is away: how long until the game plays for them.
   final int? awayActionInMs;
+  /// The current player is letting everyone slap before using their power.
+  final bool slapBeforePower;
+  /// A 3-2-1 is running: how long until slapping opens.
+  final int? slapOpensInMs;
   /// When this state arrived, to count down from.
   final DateTime receivedAt;
 
@@ -246,6 +250,8 @@ class GameStateModel {
     this.peekHoldRow,
     this.peekHoldCol,
     this.awayActionInMs,
+    this.slapBeforePower = false,
+    this.slapOpensInMs,
     DateTime? receivedAt,
   }) : receivedAt = receivedAt ?? DateTime.now();
 
@@ -270,6 +276,8 @@ class GameStateModel {
         peekHoldRow: p.peekHoldRow,
         peekHoldCol: p.peekHoldCol,
         awayActionInMs: p.awayActionInMs,
+        slapBeforePower: p.slapBeforePower,
+        slapOpensInMs: p.slapOpensInMs,
       );
 
   Map<String, dynamic>? playerById(String id) {

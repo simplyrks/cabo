@@ -103,8 +103,14 @@ class GameClient {
   void drawFromPile() =>
       send(GameMessage(type: MsgType.drawFromPile, payload: {}));
 
-  void discardDrawn() =>
-      send(GameMessage(type: MsgType.discardDrawn, payload: {}));
+  /// [slapFirst]: everyone gets a 3-2-1 and a slap at the card before its power.
+  void discardDrawn({bool slapFirst = false}) => send(GameMessage(
+        type: MsgType.discardDrawn,
+        payload: {if (slapFirst) 'slapFirst': true},
+      ));
+
+  void startPower() =>
+      send(GameMessage(type: MsgType.startPower, payload: {}));
 
   void rejoin(String playerId, String seatKey) => send(GameMessage(
         type: MsgType.rejoin,

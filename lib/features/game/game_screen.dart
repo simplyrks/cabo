@@ -463,6 +463,9 @@ class _PlayingScreenState extends ConsumerState<_PlayingScreen> {
   int _flightsToHeld = 0;
   /// While holding a drawn card: true when a tap on my card slaps it, not swaps
   bool _slapMode = false;
+  /// The power card I discarded with "slap first", so the right power starts
+  /// even if a slapped card lands on top of it.
+  Map<String, dynamic>? _slapFirstCard;
   /// When I last slapped in slap mode, so a double tap doesn't also swap
   DateTime? _lastSlapModeTapAt;
   final Map<String, GlobalKey> _handKeys = {};
@@ -816,15 +819,18 @@ class _PlayingScreenState extends ConsumerState<_PlayingScreen> {
       });
     });
 
-    // The current player switched to slapping: a banner, maybe a countdown, for everyone
+    // The current player switched to slapping: a banner, maybe a countdown, for
+    // everyone. It names nobody: everyone can see whose turn it is.
     ref.listenManual(slapActivatedProvider, (_, activated) {
       if (activated == null) return;
-      final name = activated.playerId == myId ? 'You' : _playerName(activated.playerId);
       setState(() {
-        if (activated.playerId == myId) _slapMode = true;
+        if (activated.playerId == myId && isMyTurn && gs.turnPhase == 'cardDrawn') {
+          _slapMode = true;
+        }
+        // Slapping already open: nothing changes for anyone, so no banner
+        if (activated.countdownMs == 0) return;
         _addAnimation((key, remove) => SlapBanner(
               key: key,
-              name: name,
               countdown: Duration(milliseconds: activated.countdownMs),
               onDone: remove,
             ));
@@ -1156,7 +1162,9 @@ class _PlayingScreenState extends ConsumerState<_PlayingScreen> {
 
         // ── Mid-turn UI (power / drawn card) — compact horizontal layout ─────
         if (isMyTurn && gs.drawnCard != null) _buildDrawnCardCompact(powerSel),
-        if (isMyTurn && gs.turnPhase == 'usingPower' && gs.peekHoldActorId == null) ...[
+        if (isMyTurn && gs.turnPhase == 'usingPower' && gs.slapBeforePower)
+          _buildSlapBeforePower()
+        else if (isMyTurn && gs.turnPhase == 'usingPower' && gs.peekHoldActorId == null) ...[
           _buildPowerInstructions(powerSel),
           if (powerSel.step == PowerStep.smartSwapConfirm)
             _buildSmartSwapComparison(powerSel),
@@ -1567,37 +1575,24 @@ class _PlayingScreenState extends ConsumerState<_PlayingScreen> {
                     style: TextStyle(color: AppColors.textSecondary, fontSize: 11),
                   ),
                   const SizedBox(height: 6),
-                  SizedBox.fromSize(
-                    size: _drawnActionSize,
-                    child: ElevatedButton(
-                      onPressed: () {
-                        final card = gs.drawnCard;
-                        if (card != null) {
-                          _initPowerStep(
-                            card['rank'] as String? ?? '',
-                            card['suit'] as String? ?? '',
-                          );
-                        }
-                        ref.read(gameClientProvider).discardDrawn();
-                      },
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: AppColors.surface,
-                        padding: EdgeInsets.zero,
-                        minimumSize: Size.zero,
-                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(_drawnActionSize.height / 2),
-                          side: BorderSide(
-                            color: AppColors.textSecondary.withValues(alpha: 0.25),
-                          ),
-                        ),
-                      ),
-                      child: const Text(
-                        'Discard & use power',
-                        style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
-                      ),
-                    ),
-                  ),
+                  _drawnActionButton('Discard & use power', () {
+                    final card = gs.drawnCard;
+                    if (card != null) {
+                      _initPowerStep(
+                        card['rank'] as String? ?? '',
+                        card['suit'] as String? ?? '',
+                      );
+                    }
+                    ref.read(gameClientProvider).discardDrawn();
+                  }),
+                  const SizedBox(height: 8),
+                  _drawnActionButton('Discard, slap, then power', () {
+                    // The power waits until everyone has had a slap at the card
+                    _slapFirstCard = gs.drawnCard;
+                    ref.read(_powerStateProvider.notifier).state =
+                        const PowerSelectionState();
+                    ref.read(gameClientProvider).discardDrawn(slapFirst: true);
+                  }),
                   const SizedBox(height: 8),
                   _buildSwapSlapSwitch(),
                 ],
@@ -1609,8 +1604,103 @@ class _PlayingScreenState extends ConsumerState<_PlayingScreen> {
     );
   }
 
-  /// The discard button and the swap/slap switch share one size.
-  static const _drawnActionSize = Size(184, 40);
+  /// The discard buttons and the swap/slap switch share one size.
+  static const _drawnActionSize = Size(204, 40);
+
+  Widget _drawnActionButton(String label, VoidCallback onPressed) {
+    return SizedBox.fromSize(
+      size: _drawnActionSize,
+      child: ElevatedButton(
+        onPressed: onPressed,
+        style: ElevatedButton.styleFrom(
+          backgroundColor: AppColors.surface,
+          padding: EdgeInsets.zero,
+          minimumSize: Size.zero,
+          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(_drawnActionSize.height / 2),
+            side: BorderSide(
+              color: AppColors.textSecondary.withValues(alpha: 0.25),
+            ),
+          ),
+        ),
+        child: Text(
+          label,
+          style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
+        ),
+      ),
+    );
+  }
+
+  /// My power waits while everyone gets a slap at the card I discarded.
+  Widget _buildSlapBeforePower() {
+    final countingDown = gs.slapOpensInMs != null;
+    final String hint;
+    if (countingDown) {
+      hint = 'Slapping opens in a moment…';
+    } else if (gs.matchWindowOpen) {
+      hint = 'Slapping is open — tap a card to slap, or start your power';
+    } else {
+      hint = 'You\'ve had your slap — start your power when you\'re ready';
+    }
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        decoration: BoxDecoration(
+          color: AppColors.surface,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: AppColors.danger.withValues(alpha: 0.4)),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              hint,
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: AppColors.textSecondary, fontSize: 12),
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              alignment: WrapAlignment.center,
+              spacing: 8,
+              runSpacing: 4,
+              children: [
+                ElevatedButton(
+                  onPressed: countingDown
+                      ? null
+                      : () {
+                          final card = _slapFirstCard ?? gs.topDiscard;
+                          _slapFirstCard = null;
+                          if (card != null) {
+                            _initPowerStep(
+                              card['rank'] as String? ?? '',
+                              card['suit'] as String? ?? '',
+                            );
+                          }
+                          ref.read(gameClientProvider).startPower();
+                        },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.highlight,
+                    foregroundColor: Colors.black87,
+                  ),
+                  child: const Text('Use power now'),
+                ),
+                TextButton(
+                  onPressed: () {
+                    _slapFirstCard = null;
+                    ref.read(gameClientProvider).skipPower();
+                  },
+                  child: const Text('Skip power',
+                      style: TextStyle(color: AppColors.textSecondary)),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 
   /// What a tap on my own card does while I hold a drawn card: swap or slap.
   Widget _buildSwapSlapSwitch() {
