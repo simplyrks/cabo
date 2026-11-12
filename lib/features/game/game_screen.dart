@@ -213,107 +213,6 @@ class _ReconnectOverlay extends ConsumerWidget {
   }
 }
 
-/// The turn timer under the status bar, e.g. "Ravi is deciding · 12s", with a
-/// bar running down. It turns red for the last few seconds and for away players.
-class _TurnTimerBar extends StatefulWidget {
-  final String text;
-  final DateTime deadline;
-  final Duration total;
-  final bool away;
-  final bool mine;
-
-  const _TurnTimerBar({
-    super.key,
-    required this.text,
-    required this.deadline,
-    required this.total,
-    this.away = false,
-    this.mine = false,
-  });
-
-  @override
-  State<_TurnTimerBar> createState() => _TurnTimerBarState();
-}
-
-class _TurnTimerBarState extends State<_TurnTimerBar> {
-  late final Timer _tick;
-
-  @override
-  void initState() {
-    super.initState();
-    _tick = Timer.periodic(const Duration(milliseconds: 100), (_) {
-      if (mounted) setState(() {});
-    });
-  }
-
-  @override
-  void dispose() {
-    _tick.cancel();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final leftMs = widget.deadline.difference(DateTime.now()).inMilliseconds;
-    final seconds = (leftMs / 1000).ceil().clamp(0, 99);
-    final totalMs = widget.total.inMilliseconds;
-    final fraction = totalMs <= 0 ? 0.0 : (leftMs / totalMs).clamp(0.0, 1.0);
-    final urgent = widget.away || seconds <= 3;
-    final color = urgent
-        ? AppColors.danger
-        : widget.mine
-            ? AppColors.highlight
-            : AppColors.textSecondary;
-    return Container(
-      width: double.infinity,
-      color: color.withValues(alpha: 0.12),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
-            child: Row(
-              children: [
-                Icon(widget.away ? Icons.wifi_off : Icons.timer_outlined,
-                    size: 14, color: color),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    widget.text,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: AppColors.textPrimary,
-                      fontWeight: widget.mine ? FontWeight.bold : FontWeight.normal,
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Text(
-                  '${seconds}s',
-                  style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.bold,
-                    color: color,
-                    fontFeatures: const [FontFeature.tabularFigures()],
-                  ),
-                ),
-              ],
-            ),
-          ),
-          Align(
-            alignment: Alignment.centerLeft,
-            child: FractionallySizedBox(
-              widthFactor: fraction,
-              child: Container(height: 3, color: color),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
 // ─── Initial peek ──────────────────────────────────────────────────────────────
 
 class _InitialPeekScreen extends ConsumerStatefulWidget {
@@ -781,51 +680,25 @@ class _PlayingScreenState extends ConsumerState<_PlayingScreen> {
           targetId, row, col, _shownDiscard?['rank'] as String?, _lastTouchUs);
   }
 
-  /// Who the game is waiting for, how long they have, and what happens then.
-  Widget _buildTurnTimer() {
-    bool isAway(String? id) =>
-        id != null && (gs.playerById(id)?['isConnected'] as bool? ?? true) == false;
+  /// Who the turn timer is running for: an away player who owes a card, or
+  /// else the player whose turn it is.
+  String? get _timerPlayerId {
+    if (gs.turnTimeLeftMs == null) return null;
     final giver = gs.pendingGiveCardAttackerId;
-    final current = gs.currentPlayerId ?? '';
-    final mine = current == myId;
-    final String text;
-    var away = false;
-    if (isAway(giver)) {
-      away = true;
-      text = '${_playerName(giver!)} is away — a card will be given for them';
-    } else if (isAway(current)) {
-      away = true;
-      final name = _playerName(current);
-      text = switch (gs.turnPhase) {
-        'waitingForDraw' => '$name is away — their turn will be skipped',
-        'cardDrawn' => '$name is away — their card will be discarded',
-        _ => '$name is away — their power will be skipped',
-      };
-    } else if (mine) {
-      text = switch (gs.turnPhase) {
-        'waitingForDraw' => 'Your turn — draw a card',
-        'cardDrawn' => 'Decide — or the card is discarded',
-        _ when gs.slapBeforePower => 'Start your power — or it\'s skipped',
-        _ => 'Use your power — or it\'s skipped',
-      };
-    } else {
-      final name = _playerName(current);
-      text = switch (gs.turnPhase) {
-        'waitingForDraw' => '$name is drawing',
-        'cardDrawn' => '$name is deciding',
-        _ => '$name is using their power',
-      };
-    }
-    return _TurnTimerBar(
-      // A fresh bar for each new wait, so it starts full
-      key: ValueKey('$current:${gs.turnPhase}:${gs.slapBeforePower}:$giver'),
-      text: text,
-      deadline: gs.receivedAt.add(Duration(milliseconds: gs.turnTimeLeftMs!)),
-      total: Duration(milliseconds: gs.turnTimeTotalMs ?? gs.turnTimeLeftMs!),
-      away: away,
-      mine: mine && !away,
-    );
+    final giverAway = giver != null &&
+        (gs.playerById(giver)?['isConnected'] as bool? ?? true) == false;
+    return giverAway ? giver : gs.currentPlayerId;
   }
+
+  /// When [playerId]'s turn timer runs out, if it's running for them.
+  DateTime? _timerDeadlineFor(String playerId) {
+    if (_timerPlayerId != playerId) return null;
+    return gs.receivedAt.add(Duration(milliseconds: gs.turnTimeLeftMs!));
+  }
+
+  Duration? get _timerTotal => gs.turnTimeTotalMs == null
+      ? null
+      : Duration(milliseconds: gs.turnTimeTotalMs!);
 
   String _peekHoldMessage(String actorId, String targetId) {
     final position = gs.peekHoldRow != null && gs.peekHoldCol != null
@@ -1050,7 +923,6 @@ class _PlayingScreenState extends ConsumerState<_PlayingScreen> {
                   localPlayerId: myId,
                   onHistoryTap: () => _openHistory(context),
                 ),
-                if (gs.turnTimeLeftMs != null) _buildTurnTimer(),
                 Expanded(child: _buildTable(powerSel)),
                 _buildActionBar(powerSel),
               ],
@@ -1303,6 +1175,8 @@ class _PlayingScreenState extends ConsumerState<_PlayingScreen> {
                 highlightedSlots: myHighlighted,
                 slotKey: (row, col) => _slotKey(myId, row, col),
                 hiddenSlots: _hiddenSlotsOf(myId),
+                timerDeadline: _timerDeadlineFor(myId),
+                timerTotal: _timerTotal,
                 onCardTap: _iAmEliminated ? null : _onMyCardTap(powerSel),
               ),
             ),
@@ -1476,6 +1350,8 @@ class _PlayingScreenState extends ConsumerState<_PlayingScreen> {
           highlightedSlots: theirHighlighted,
           slotKey: (row, col) => _slotKey(oid, row, col),
           hiddenSlots: _hiddenSlotsOf(oid),
+          timerDeadline: _timerDeadlineFor(oid),
+          timerTotal: _timerTotal,
           onCardTap: _canTapOpponentCard(powerSel, oid)
               ? (row, col) => _onOpponentCardTap(oid, row, col, powerSel)
               : null,

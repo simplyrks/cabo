@@ -105,6 +105,11 @@ class GameRoom {
   static const _drawTime = Duration(seconds: 10);
   static const _decideTime = Duration(seconds: 15);
   static const _powerTime = Duration(seconds: 15);
+  /// Queen and King swaps take longer: two cards to pick, and a decision.
+  static const _swapPowerTime = Duration(seconds: 30);
+  /// The power being used, e.g. 'queen'. A slap can land on top of its card,
+  /// so the discard pile can't be relied on for this.
+  String? _powerRank;
   /// How long the table waits for an away player who owes a card.
   static const _awayGrace = Duration(seconds: 15);
   Timer? _turnTimer;
@@ -371,6 +376,7 @@ class GameRoom {
         type: MsgType.slapActivated,
         payload: SlapActivatedPayload(playerId: playerId).toJson(),
       ));
+      _restartTurnTimer();
       _broadcastState();
       return;
     }
@@ -381,6 +387,7 @@ class GameRoom {
   void _startSlapCountdown(String playerId) {
     _cancelSlapCountdown();
     _log('🖐 Slapping opens for everyone in 3 seconds.');
+    _restartTurnTimer();
     _broadcast(GameMessage(
       type: MsgType.slapActivated,
       payload: SlapActivatedPayload(
@@ -476,6 +483,7 @@ class GameRoom {
     _cancelSlapCountdown();
     _clearSlapFirst();
     final hasPower = _engine.state.turnPhase == TurnPhase.usingPower;
+    _powerRank = hasPower ? drawnRank : null;
 
     // Using a power is the one time slapping stops. With "slap first" the old
     // card's window closes too, and the countdown opens one for this card.
@@ -629,6 +637,7 @@ class GameRoom {
         );
         _send(ws, GameMessage(type: MsgType.peekReveal, payload: reveal.toJson()));
         _log('$name (Red King) peeked at $targetName\'s card — deciding whether to swap...');
+        _restartTurnTimer();
         _broadcastState();
         return;
 
@@ -721,6 +730,7 @@ class GameRoom {
 
     _pendingGiveCardAttackerId = null;
     _pendingGiveCardTargetId = null;
+    _restartTurnTimer();
     _broadcastState();
     _checkRoundEnd();
   }
@@ -804,6 +814,7 @@ class GameRoom {
 
     // Consume this player's one attempt, and show straight away that they tried
     _slapAttemptedIds.add(session.playerId);
+    _restartTurnTimer();
     _slapAttempts.add(_SlapAttempt(
       playerId: session.playerId,
       targetId: targetId,
@@ -1112,6 +1123,9 @@ class GameRoom {
     return switch (_engine.state.turnPhase) {
       TurnPhase.waitingForDraw => _drawTime,
       TurnPhase.cardDrawn => _decideTime,
+      // Starting a power after "slap first" is quick; a swap itself is not
+      _ when _slapBeforePower => _powerTime,
+      _ when _powerRank == 'queen' || _powerRank == 'king' => _swapPowerTime,
       _ => _powerTime,
     };
   }
@@ -1127,6 +1141,15 @@ class GameRoom {
     _turnTimerTotal = _timeFor(waitingOn);
     _turnDeadlineUs = _clock.elapsedMicroseconds + _turnTimerTotal.inMicroseconds;
     _turnTimer = Timer(_turnTimerTotal, () => _onTurnTimeout(waitingOn));
+  }
+
+  /// Someone did something at the table: the current timer starts over, so the
+  /// player it's running for isn't rushed by what happened. The next state
+  /// broadcast starts it again.
+  void _restartTurnTimer() {
+    _turnTimer?.cancel();
+    _turnTimer = null;
+    _turnTimerFor = null;
   }
 
   void _stopTurnTimer() {

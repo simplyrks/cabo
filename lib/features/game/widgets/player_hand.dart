@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:cabo/core/theme/app_theme.dart';
 import 'card_widget.dart';
@@ -28,6 +30,11 @@ class PlayerHand extends StatelessWidget {
   final Duration flipStart;
   final Duration flipStagger;
 
+  /// The game is waiting on this player: their turn timer runs out at
+  /// [timerDeadline], shown as a line around their name that shrinks away.
+  final DateTime? timerDeadline;
+  final Duration? timerTotal;
+
   const PlayerHand({
     super.key,
     required this.playerJson,
@@ -41,6 +48,8 @@ class PlayerHand extends StatelessWidget {
     this.dealIn = false,
     this.flipStart = Duration.zero,
     this.flipStagger = Duration.zero,
+    this.timerDeadline,
+    this.timerTotal,
   });
 
   static const _dealGap = Duration(milliseconds: 130);
@@ -135,7 +144,10 @@ class PlayerHand extends StatelessWidget {
       child: Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        AnimatedContainer(
+        _NameTimer(
+          deadline: isEliminated ? null : timerDeadline,
+          total: timerTotal,
+          child: AnimatedContainer(
           duration: const Duration(milliseconds: 250),
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
           decoration: BoxDecoration(
@@ -177,6 +189,7 @@ class PlayerHand extends StatelessWidget {
             ],
           ),
         ),
+        ),
         const SizedBox(height: 6),
         Row(
           mainAxisSize: MainAxisSize.min,
@@ -209,6 +222,138 @@ class PlayerHand extends StatelessWidget {
       ),
     );
   }
+}
+
+/// A line around the name pill that shrinks back to the top as the turn timer
+/// runs down, with the seconds left beside the pill. Red for the last 3 seconds.
+class _NameTimer extends StatefulWidget {
+  final DateTime? deadline;
+  final Duration? total;
+  final Widget child;
+
+  const _NameTimer({required this.deadline, required this.total, required this.child});
+
+  @override
+  State<_NameTimer> createState() => _NameTimerState();
+}
+
+class _NameTimerState extends State<_NameTimer> with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl =
+      AnimationController(vsync: this, duration: const Duration(seconds: 1));
+
+  @override
+  void initState() {
+    super.initState();
+    _sync();
+  }
+
+  @override
+  void didUpdateWidget(_NameTimer old) {
+    super.didUpdateWidget(old);
+    if (old.deadline != widget.deadline) _sync();
+  }
+
+  /// Run the line from where it is now down to empty at the deadline.
+  void _sync() {
+    final deadline = widget.deadline;
+    if (deadline == null) {
+      _ctrl.stop();
+      return;
+    }
+    final totalMs = (widget.total ?? const Duration(seconds: 10)).inMilliseconds;
+    final leftMs = deadline.difference(DateTime.now()).inMilliseconds;
+    _ctrl.duration = Duration(milliseconds: math.max(totalMs, 1));
+    _ctrl.value = 1 - (leftMs / math.max(totalMs, 1)).clamp(0.0, 1.0);
+    if (leftMs > 0) _ctrl.forward();
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (widget.deadline == null) return widget.child;
+    return AnimatedBuilder(
+      animation: _ctrl,
+      child: widget.child,
+      builder: (_, child) {
+        final left = 1 - _ctrl.value;
+        final totalMs = (widget.total ?? const Duration(seconds: 10)).inMilliseconds;
+        final seconds = (left * totalMs / 1000).ceil();
+        final color = seconds <= 3 ? AppColors.danger : AppColors.highlight;
+        // The seconds hang off to the right, so the name stays centred over the cards
+        return Stack(
+          clipBehavior: Clip.none,
+          children: [
+            CustomPaint(
+              foregroundPainter: _PillOutlinePainter(fraction: left, color: color),
+              child: child,
+            ),
+            Positioned(
+              right: -32,
+              top: 0,
+              bottom: 0,
+              width: 28,
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                '${seconds}s',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.bold,
+                  color: color,
+                  fontFeatures: const [FontFeature.tabularFigures()],
+                  ),
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+/// The part of a pill's outline still left, starting and ending at the top middle.
+class _PillOutlinePainter extends CustomPainter {
+  final double fraction;
+  final Color color;
+
+  _PillOutlinePainter({required this.fraction, required this.color});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final w = size.width, h = size.height;
+    final r = math.min(h / 2, w / 2);
+    final radius = Radius.circular(r);
+    final outline = Path()
+      ..moveTo(w / 2, 0)
+      ..lineTo(w - r, 0)
+      ..arcToPoint(Offset(w - r, h), radius: radius)
+      ..lineTo(r, h)
+      ..arcToPoint(Offset(r, 0), radius: radius)
+      ..close();
+    final track = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2.5
+      ..color = color.withValues(alpha: 0.18);
+    canvas.drawPath(outline, track);
+    if (fraction <= 0) return;
+    final metric = outline.computeMetrics().first;
+    final line = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2.5
+      ..strokeCap = StrokeCap.round
+      ..color = color;
+    canvas.drawPath(metric.extractPath(0, metric.length * fraction), line);
+  }
+
+  @override
+  bool shouldRepaint(_PillOutlinePainter old) =>
+      old.fraction != fraction || old.color != color;
 }
 
 /// One card sliding in as it's dealt.
