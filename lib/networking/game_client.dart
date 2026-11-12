@@ -109,6 +109,9 @@ class GameClient {
         payload: {if (slapFirst) 'slapFirst': true},
       ));
 
+  void leaveGame() =>
+      send(GameMessage(type: MsgType.leaveGame, payload: {}));
+
   void startPower() =>
       send(GameMessage(type: MsgType.startPower, payload: {}));
 

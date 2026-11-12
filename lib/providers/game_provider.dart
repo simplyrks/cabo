@@ -321,6 +321,15 @@ final slapRankingProvider = StateProvider<SlapRankingPayload?>((_) => null);
 /// The current player switching to slap mid-turn, announced to everyone.
 final slapActivatedProvider = StateProvider<SlapActivatedPayload?>((_) => null);
 
+/// A big notice for every screen, e.g. "Ravi has discarded all their cards!".
+/// A new object each time, so the same words twice still show twice.
+class Announcement {
+  final String text;
+  Announcement(this.text);
+}
+
+final announcementProvider = StateProvider<Announcement?>((_) => null);
+
 // ─── Table animations ─────────────────────────────────────────────────────────
 
 /// The latest card movements for this screen to play.
@@ -346,6 +355,7 @@ void resetGameSession(WidgetRef ref) {
   ref.read(slapRankingProvider.notifier).state = null;
   ref.read(tableAnimationProvider.notifier).state = null;
   ref.read(slapActivatedProvider.notifier).state = null;
+  ref.read(announcementProvider.notifier).state = null;
 }
 
 // ─── Message listener ─────────────────────────────────────────────────────────
@@ -459,6 +469,10 @@ class MessageRouter {
       case MsgType.slapActivated:
         _ref.read(slapActivatedProvider.notifier).state =
             SlapActivatedPayload.fromJson(msg.payload);
+
+      case MsgType.announcement:
+        _ref.read(announcementProvider.notifier).state =
+            Announcement(msg.payload['text'] as String? ?? '');
 
       case MsgType.tableAnimation:
         _ref.read(tableAnimationProvider.notifier).state =

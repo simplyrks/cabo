@@ -642,6 +642,79 @@ class _CaboSplashState extends State<CaboSplash>
   }
 }
 
+/// A big notice across the table, e.g. a player has discarded all their cards.
+class AnnouncementBanner extends StatefulWidget {
+  final String text;
+  final VoidCallback onDone;
+
+  const AnnouncementBanner({super.key, required this.text, required this.onDone});
+
+  static const duration = Duration(milliseconds: 2500);
+
+  @override
+  State<AnnouncementBanner> createState() => _AnnouncementBannerState();
+}
+
+class _AnnouncementBannerState extends State<AnnouncementBanner>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl =
+      AnimationController(vsync: this, duration: AnnouncementBanner.duration)
+        ..addStatusListener((status) {
+          if (status == AnimationStatus.completed) widget.onDone();
+        })
+        ..forward();
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Positioned.fill(
+      child: IgnorePointer(
+        child: Align(
+          alignment: const Alignment(0, -0.25),
+          child: AnimatedBuilder(
+            animation: _ctrl,
+            builder: (_, child) {
+              final t = _ctrl.value;
+              final ms = t * AnnouncementBanner.duration.inMilliseconds;
+              final appear = Curves.easeOutBack.transform((ms / 300).clamp(0.0, 1.0));
+              final fade = 1 - ((t - 0.85) / 0.15).clamp(0.0, 1.0);
+              return Opacity(
+                opacity: fade,
+                child: Transform.scale(scale: appear, child: child),
+              );
+            },
+            child: Container(
+              margin: const EdgeInsets.symmetric(horizontal: 24),
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+              decoration: BoxDecoration(
+                color: AppColors.surface,
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: AppColors.gold, width: 2),
+                boxShadow: const [BoxShadow(color: Colors.black54, blurRadius: 16)],
+              ),
+              child: Text(
+                widget.text,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  color: AppColors.gold,
+                  fontSize: 18,
+                  fontWeight: FontWeight.w800,
+                  height: 1.3,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 /// A banner across the table when the current player switches to slapping,
 /// counting down to the moment slapping opens for everyone. It names nobody:
 /// everyone can see whose turn it is.

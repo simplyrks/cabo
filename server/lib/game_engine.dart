@@ -444,6 +444,13 @@ class GameEngine {
     _endTurn();
   }
 
+  /// A player has no cards left: CABO is called for them and the round ends.
+  void autoCabo(String playerId) {
+    state.caboCallerId = playerId;
+    state.drawnCard = null;
+    state.phase = GamePhase.roundEnd;
+  }
+
   // ─── Round end ───────────────────────────────────────────────────────────────
 
   List<PlayerScore> computeScores() {
@@ -458,7 +465,9 @@ class GameEngine {
       );
     }).toList();
 
-    // Eliminated players sort to the bottom; among active players: lowest total, then fewest cards
+    // Eliminated players sort to the bottom; among active players, lowest
+    // total first. Points alone decide: equal lowest points is a tie, and
+    // everyone on that total wins. Card count only orders the list.
     final eliminatedIds = state.players
         .where((p) => p.isEliminated)
         .map((p) => p.id)
@@ -472,7 +481,8 @@ class GameEngine {
       return a.cardCount.compareTo(b.cardCount);
     });
 
-    final winner = scores.first;
+    final best = scores.first;
+    final bestIsEliminated = eliminatedIds.contains(best.playerId);
     return scores
         .map((s) => PlayerScore(
               playerId: s.playerId,
@@ -480,7 +490,10 @@ class GameEngine {
               totalValue: s.totalValue,
               cardCount: s.cardCount,
               calledCabo: s.calledCabo,
-              isWinner: s.playerId == winner.playerId,
+              isWinner: s.playerId == best.playerId ||
+                  (!bestIsEliminated &&
+                      !eliminatedIds.contains(s.playerId) &&
+                      s.totalValue == best.totalValue),
             ))
         .toList();
   }

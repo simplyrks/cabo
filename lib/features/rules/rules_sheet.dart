@@ -173,16 +173,22 @@ class _BasicsTab extends StatelessWidget {
           'The line around the name of the player whose turn it is shrinks as '
           'their time runs out.'),
       _Bullet(
-          'You have 10 seconds to draw. If time runs out, your turn is skipped.'),
+          'You have 20 seconds to draw. If time runs out, your turn is skipped.'),
       _Bullet(
-          'You then have 15 seconds to swap or discard. If time runs out, the card '
+          'You then have 30 seconds to swap or discard. If time runs out, the card '
           'is discarded for you, and you can still use its power.'),
       _Bullet(
-          'Using a power gets another 15 seconds, or 30 for a Queen or King swap. '
+          'Using a power gets another 30 seconds, or 45 for a Queen or King swap. '
           'If time runs out, the power is skipped.'),
+      _Bullet(
+          'If a player loses connection, each of their timers is cut to 5 seconds '
+          'until they\'re back.'),
       _Heading('Good to know'),
       _Bullet(
           'When the deck runs out, the discard pile is shuffled into a new deck.'),
+      _Bullet(
+          'The exit button at the top leaves the game for good: you\'re out of the '
+          'round and finish last. If you just lose connection, your seat is kept.'),
       _Bullet(
           'Tap the clock button at the top of the game to see everything that has '
           'happened so far.'),
@@ -288,12 +294,16 @@ class _WinningTab extends StatelessWidget {
           'At the start of your turn, before drawing, you can call CABO if you '
           'think you\'re winning.'),
       _Bullet('The round ends right away and every card is turned face up.'),
+      _Bullet(
+          'If a player gets rid of all their cards, CABO is called for them '
+          'automatically and the round ends.'),
       _Heading('Other ways the round ends'),
       _Bullet(
           'Only one player is left because everyone else has been eliminated.'),
       _Heading('Who wins'),
       _Step(1, 'The player with the lowest total points wins.'),
-      _Step(2, 'If points are tied, the player with fewer cards wins.'),
+      _Step(2, 'Only points count. If players tie on the lowest points, it\'s a tie — '
+          'the number of cards doesn\'t matter.'),
       _Step(3, 'Eliminated players always finish last.'),
       _Heading('Tips'),
       _Bullet('Low cards to keep: Black Kings (0), Aces (1), 2s.'),

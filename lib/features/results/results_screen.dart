@@ -21,8 +21,6 @@ class ResultsScreen extends ConsumerWidget {
     }
 
     final localPlayer = ref.read(localPlayerProvider);
-    final winner = roundEnd.scores.firstWhere((s) => s.isWinner);
-    final iWon = localPlayer?.id == winner.playerId;
 
     return Scaffold(
       body: WithRulesButton(
@@ -34,7 +32,8 @@ class ResultsScreen extends ConsumerWidget {
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 Text(
-                  iWon ? '🎉 You Win!' : '${winner.playerName} Wins!',
+                  roundEndHeadline(roundEnd, localPlayer?.id),
+                  textAlign: TextAlign.center,
                   style: const TextStyle(
                     fontSize: 32,
                     fontWeight: FontWeight.bold,
@@ -156,4 +155,15 @@ class _ScoreRow extends StatelessWidget {
       ),
     );
   }
+}
+
+/// "🎉 You Win!", "🏆 Ravi Wins!" or, on equal lowest points, a tie.
+String roundEndHeadline(RoundEndPayload roundEnd, String? myId) {
+  final winners = roundEnd.winners;
+  String nameOf(PlayerScore s) => s.playerId == myId ? 'You' : s.playerName;
+  if (winners.length > 1) {
+    return "🤝 It's a tie — ${winners.map(nameOf).join(' & ')}";
+  }
+  final winner = winners.first;
+  return winner.playerId == myId ? '🎉 You Win!' : '🏆 ${winner.playerName} Wins!';
 }

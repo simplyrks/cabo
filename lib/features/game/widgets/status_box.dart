@@ -8,12 +8,14 @@ class StatusBox extends StatelessWidget {
   final GameStateModel gs;
   final String localPlayerId;
   final VoidCallback onHistoryTap;
+  final VoidCallback onExitTap;
 
   const StatusBox({
     super.key,
     required this.gs,
     required this.localPlayerId,
     required this.onHistoryTap,
+    required this.onExitTap,
   });
 
   @override
@@ -115,6 +117,23 @@ class StatusBox extends StatelessWidget {
                     ),
                   ),
                 ],
+              ),
+            ),
+          ),
+          const SizedBox(width: 6),
+
+          // Leave the game
+          Tooltip(
+            message: 'Leave game',
+            child: GestureDetector(
+              onTap: onExitTap,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                decoration: BoxDecoration(
+                  color: AppColors.danger.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: const Icon(Icons.logout, size: 14, color: AppColors.danger),
               ),
             ),
           ),

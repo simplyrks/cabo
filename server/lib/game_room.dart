@@ -78,6 +78,15 @@ class GameRoom {
   int _windowOpenedAtUs = 0;
   /// A correct slap has taken the current card.
   bool _slapTaken = false;
+
+  // ─── Auto CABO ──────────────────────────────────────────────────────────────────
+  /// A player has discarded all their cards. The table holds while everyone
+  /// sees it happen, then CABO is called for them.
+  String? _autoCaboFor;
+  Timer? _autoCaboTimer;
+  /// Time for the last card to fly to the discard pile, then each notice.
+  static const _autoCaboAfterMove = Duration(milliseconds: 1800);
+  static const _autoCaboNotice = Duration(milliseconds: 2600);
   /// How long a slapped card stays up front on every screen before it moves on.
   static const _slapRevealMs = 1500;
   /// How long a swapped card stays lifted and highlighted before it moves.
@@ -102,16 +111,17 @@ class GameRoom {
   final _random = Random.secure();
 
   // ─── Turn timers ───────────────────────────────────────────────────────────────
-  static const _drawTime = Duration(seconds: 10);
-  static const _decideTime = Duration(seconds: 15);
-  static const _powerTime = Duration(seconds: 15);
+  static const _drawTime = Duration(seconds: 20);
+  static const _decideTime = Duration(seconds: 30);
+  static const _powerTime = Duration(seconds: 30);
   /// Queen and King swaps take longer: two cards to pick, and a decision.
-  static const _swapPowerTime = Duration(seconds: 30);
+  static const _swapPowerTime = Duration(seconds: 45);
   /// The power being used, e.g. 'queen'. A slap can land on top of its card,
   /// so the discard pile can't be relied on for this.
   String? _powerRank;
-  /// How long the table waits for an away player who owes a card.
-  static const _awayGrace = Duration(seconds: 15);
+  /// Every timer for a player who isn't connected: the table doesn't wait
+  /// long for someone who isn't there.
+  static const _awayTime = Duration(seconds: 5);
   Timer? _turnTimer;
   /// What the timer is waiting on, e.g. 'turn:<id>:cardDrawn'.
   String? _turnTimerFor;
@@ -172,9 +182,10 @@ class GameRoom {
       return;
     }
     // Nothing happens at the table during a peek hold, slaps included.
-    if (_peekHoldActorId != null &&
+    if ((_peekHoldActorId != null || _autoCaboFor != null) &&
         msg.type != MsgType.joinLobby &&
-        msg.type != MsgType.rejoin) {
+        msg.type != MsgType.rejoin &&
+        msg.type != MsgType.leaveGame) {
       return;
     }
     // Slaps waiting to be judged go first if this move could change a hand or
@@ -184,6 +195,8 @@ class GameRoom {
         msg.type != MsgType.rejoin &&
         msg.type != MsgType.drawFromPile) {
       _resolveSlaps();
+      // That slap may have emptied a hand: the table is now holding for auto CABO
+      if (_autoCaboFor != null) return;
     }
     try {
       switch (msg.type) {
@@ -201,6 +214,7 @@ class GameRoom {
         case MsgType.giveCard:       _onGiveCard(ws, msg.payload);
         case MsgType.activateSlap:   _onActivateSlap(ws);
         case MsgType.startPower:     _onStartPower(ws);
+        case MsgType.leaveGame:      _onLeaveGame(ws);
         default: _sendError(ws, 'Unknown message type: ${msg.type}');
       }
     } catch (e) {
@@ -440,6 +454,68 @@ class GameRoom {
   void _clearSlapFirst() {
     _slapBeforePower = false;
     _skipReopenAfterPower = false;
+  }
+
+  /// A player quits mid-game. They're out of the round, like an eliminated
+  /// player, and their seat is given up: there's no coming back to it.
+  void _onLeaveGame(WebSocket ws) {
+    final session = _sessionFor(ws);
+    if (session == null) return;
+    final state = _engine.state;
+    if (state.phase != GamePhase.initialPeek && state.phase != GamePhase.playing) {
+      return;
+    }
+    final playerId = session.playerId;
+    final player = state.getPlayer(playerId);
+    if (player == null) return;
+    final name = _nameOf(playerId);
+
+    _sessions.remove(playerId);
+    _seatKeys.remove(playerId);
+    player.isConnected = false;
+    player.isEliminated = true;
+    _log('🚪 $name left the game.');
+
+    // Nothing more is owed to or by them
+    if (_pendingGiveCardAttackerId == playerId ||
+        _pendingGiveCardTargetId == playerId) {
+      _pendingGiveCardAttackerId = null;
+      _pendingGiveCardTargetId = null;
+    }
+    if (_autoCaboFor == playerId) _clearAutoCabo();
+
+    if (state.phase == GamePhase.playing && state.currentPlayerId == playerId) {
+      if (_peekHoldActorId == playerId) _clearPeekHold();
+      _cancelSlapCountdown();
+      _clearSlapFirst();
+      // A card they were holding stays in the game, under the top discard so
+      // it doesn't change what can be slapped
+      final drawn = state.drawnCard;
+      if (drawn != null) {
+        state.discardPile.insert(0, drawn);
+        state.drawnCard = null;
+        _animate(TableAnimationPayload(moves: [
+          CardMove(
+            from: CardSpot.heldBy(playerId),
+            to: const CardSpot.discardPile(),
+          ),
+        ]));
+      }
+      state.currentPlayerId = state.getNextPlayerId(playerId);
+      state.turnPhase = TurnPhase.waitingForDraw;
+      _log("${_nameOf(state.currentPlayerId!)}'s turn.");
+    }
+
+    if (_engine.onlyOneActivePlayerLeft) {
+      state.phase = GamePhase.roundEnd;
+      _checkRoundEnd();
+      return;
+    }
+    if (_engine.checkInitialPeekReady()) {
+      _log("Everyone's ready — let's play! ${_nameOf(_engine.state.currentPlayerId!)} goes first.");
+    }
+    _broadcastState();
+    if (_sessions.isEmpty) _abandonTimer ??= Timer(_abandonAfter, _abandonGame);
   }
 
   /// The power player is ready to use their power after the slap window.
@@ -733,6 +809,7 @@ class GameRoom {
     _restartTurnTimer();
     _broadcastState();
     _checkRoundEnd();
+    _checkEmptyHand(); // giving away their last card leaves the giver with none
   }
 
   void _onMatchCard(WebSocket ws, Map<String, dynamic> payload) {
@@ -885,7 +962,57 @@ class GameRoom {
         _engine.state.phase == GamePhase.playing) {
       _engine.state.phase = GamePhase.roundEnd;
       _checkRoundEnd();
+      return;
     }
+    _checkEmptyHand();
+  }
+
+  /// Someone has no cards left: show the table what happened, then call CABO
+  /// for them, which ends the round. A player about to be given a card isn't
+  /// out of cards.
+  void _checkEmptyHand() {
+    final state = _engine.state;
+    if (state.phase != GamePhase.playing || _autoCaboFor != null) return;
+    final empty = state.players.where((p) =>
+        !p.isEliminated &&
+        p.cardCount == 0 &&
+        p.id != _pendingGiveCardTargetId);
+    if (empty.isEmpty) return;
+    final playerId = empty.first.id;
+    final name = _nameOf(playerId);
+
+    _autoCaboFor = playerId;
+    _closeMatchWindow();
+    _cancelSlapCountdown();
+    _clearSlapFirst();
+    _clearSlaps();
+    _broadcastState(); // stops the turn timer and slapping on every screen
+
+    void announce(String text) {
+      _log(text);
+      _broadcast(GameMessage(type: MsgType.announcement, payload: {'text': text}));
+      _broadcastState();
+    }
+
+    // The last card lands on the discard pile first
+    _autoCaboTimer = Timer(_autoCaboAfterMove, () {
+      announce('🃏 $name has discarded all their cards!');
+      _autoCaboTimer = Timer(_autoCaboNotice, () {
+        announce('📣 CABO called automatically — $name has no cards left.');
+        _autoCaboTimer = Timer(_autoCaboNotice, () {
+          _autoCaboTimer = null;
+          if (_autoCaboFor != playerId) return;
+          _engine.autoCabo(playerId);
+          _checkRoundEnd();
+        });
+      });
+    });
+  }
+
+  void _clearAutoCabo() {
+    _autoCaboTimer?.cancel();
+    _autoCaboTimer = null;
+    _autoCaboFor = null;
   }
 
   SlapReveal _slapReveal(_SlapAttempt attempt, CaboCard card) => SlapReveal(
@@ -1085,6 +1212,7 @@ class GameRoom {
     _clearSlaps();
     _cancelSlapCountdown();
     _clearSlapFirst();
+    _clearAutoCabo();
     _stopTurnTimer();
     _abandonTimer?.cancel();
     _abandonTimer = null;
@@ -1105,7 +1233,11 @@ class GameRoom {
   /// decision or power, or a card owed by a player who is away.
   String? _timedWait() {
     final state = _engine.state;
-    if (state.phase != GamePhase.playing || _peekHoldActorId != null) return null;
+    if (state.phase != GamePhase.playing ||
+        _peekHoldActorId != null ||
+        _autoCaboFor != null) {
+      return null;
+    }
     final giver = _pendingGiveCardAttackerId;
     if (giver != null && !(state.getPlayer(giver)?.isConnected ?? true)) {
       return 'give:$giver';
@@ -1115,11 +1247,15 @@ class GameRoom {
     if (player == null || player.isEliminated) return null;
     // Letting everyone slap before the power, then the power itself, are timed apart
     final stage = _slapBeforePower ? ':slapFirst' : '';
-    return 'turn:$current:${state.turnPhase.name}$stage';
+    // Dropping out or coming back starts the timer again, short or full
+    final away = player.isConnected ? '' : ':away';
+    return 'turn:$current:${state.turnPhase.name}$stage$away';
   }
 
   Duration _timeFor(String waitingOn) {
-    if (waitingOn.startsWith('give:')) return _awayGrace;
+    if (waitingOn.startsWith('give:') || waitingOn.endsWith(':away')) {
+      return _awayTime;
+    }
     return switch (_engine.state.turnPhase) {
       TurnPhase.waitingForDraw => _drawTime,
       TurnPhase.cardDrawn => _decideTime,
@@ -1173,6 +1309,7 @@ class GameRoom {
       return;
     }
     _resolveSlaps();
+    if (_autoCaboFor != null) return;
     final parts = waitingOn.split(':');
     final playerId = parts[1];
     final name = _nameOf(playerId);
@@ -1248,8 +1385,13 @@ class GameRoom {
   void _checkRoundEnd() {
     if (_engine.state.phase == GamePhase.roundEnd) {
       final scores = _engine.computeScores();
-      final winner = scores.firstWhere((s) => s.isWinner);
-      _log('🏆 Round over! ${winner.playerName} wins!');
+      final winners = scores.where((s) => s.isWinner).toList();
+      final winner = winners.first;
+      if (winners.length > 1) {
+        _log("🤝 Round over! It's a tie — ${winners.map((w) => w.playerName).join(' & ')}.");
+      } else {
+        _log('🏆 Round over! ${winner.playerName} wins!');
+      }
       // Broadcast state FIRST with all cards revealed (phase=roundEnd reveals all)
       _broadcastState();
       // Then send roundEnd scores
@@ -1258,6 +1400,7 @@ class GameRoom {
       _closeMatchWindow();
       _cancelSlapCountdown();
       _clearSlapFirst();
+      _clearAutoCabo();
       _pendingGiveCardAttackerId = null;
       _pendingGiveCardTargetId = null;
       _clearSlaps();

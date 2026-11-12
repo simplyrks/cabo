@@ -224,8 +224,8 @@ class PlayerHand extends StatelessWidget {
   }
 }
 
-/// A line around the name pill that shrinks back to the top as the turn timer
-/// runs down, with the seconds left beside the pill. Red for the last 3 seconds.
+/// A line around the name pill that shrinks back to the top, going round, as
+/// the turn timer runs down. Red for the last 3 seconds.
 class _NameTimer extends StatefulWidget {
   final DateTime? deadline;
   final Duration? total;
@@ -284,33 +284,9 @@ class _NameTimerState extends State<_NameTimer> with SingleTickerProviderStateMi
         final totalMs = (widget.total ?? const Duration(seconds: 10)).inMilliseconds;
         final seconds = (left * totalMs / 1000).ceil();
         final color = seconds <= 3 ? AppColors.danger : AppColors.highlight;
-        // The seconds hang off to the right, so the name stays centred over the cards
-        return Stack(
-          clipBehavior: Clip.none,
-          children: [
-            CustomPaint(
-              foregroundPainter: _PillOutlinePainter(fraction: left, color: color),
-              child: child,
-            ),
-            Positioned(
-              right: -32,
-              top: 0,
-              bottom: 0,
-              width: 28,
-              child: Align(
-                alignment: Alignment.centerLeft,
-                child: Text(
-                '${seconds}s',
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.bold,
-                  color: color,
-                  fontFeatures: const [FontFeature.tabularFigures()],
-                  ),
-                ),
-              ),
-            ),
-          ],
+        return CustomPaint(
+          foregroundPainter: _PillOutlinePainter(fraction: left, color: color),
+          child: child,
         );
       },
     );

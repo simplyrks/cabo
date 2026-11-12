@@ -14,6 +14,7 @@ import 'widgets/slap_status.dart';
 import 'widgets/status_box.dart' show StatusBox, HistorySheet;
 import 'widgets/table_animations.dart';
 import 'package:cabo/features/rules/rules_sheet.dart';
+import 'package:cabo/features/results/results_screen.dart' show roundEndHeadline;
 
 // ─── Power selection state ────────────────────────────────────────────────────
 
@@ -178,7 +179,7 @@ class _ReconnectOverlay extends ConsumerWidget {
                 Text(
                   trying
                       ? 'Your seat and cards are kept for you. If your turn comes '
-                          'up, the game plays it for you after 15 seconds.'
+                          'up, the game plays it for you when the timer runs out.'
                       : state.message ?? '',
                   textAlign: TextAlign.center,
                   style: const TextStyle(
@@ -211,6 +212,38 @@ class _ReconnectOverlay extends ConsumerWidget {
       ),
     );
   }
+}
+
+/// Asks first, then quits the game for good: the player is out of the round
+/// and the seat is given up, so there's no rejoining.
+Future<void> confirmLeaveGame(BuildContext context, WidgetRef ref) async {
+  final leave = await showDialog<bool>(
+    context: context,
+    builder: (dialogContext) => AlertDialog(
+      backgroundColor: AppColors.surface,
+      title: const Text('Leave this game?'),
+      content: const Text(
+        "You'll be out of this round and can't come back to it. "
+        'You finish last, like an eliminated player.',
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(dialogContext).pop(false),
+          child: const Text('Stay'),
+        ),
+        ElevatedButton(
+          onPressed: () => Navigator.of(dialogContext).pop(true),
+          style: ElevatedButton.styleFrom(backgroundColor: AppColors.danger),
+          child: const Text('Leave'),
+        ),
+      ],
+    ),
+  );
+  if (leave != true || !context.mounted) return;
+  ref.read(reconnectProvider.notifier).stop();
+  ref.read(gameClientProvider).leaveGame();
+  ref.read(savedSeatProvider.notifier).clear();
+  context.go('/');
 }
 
 // ─── Initial peek ──────────────────────────────────────────────────────────────
@@ -296,6 +329,13 @@ class _InitialPeekScreenState extends ConsumerState<_InitialPeekScreen> {
                           ref.read(gameClientProvider).initialPeekDone();
                         },
                   child: Text(_confirmed ? 'Waiting for others...' : "I've memorised my cards"),
+                ),
+                const SizedBox(height: 8),
+                TextButton.icon(
+                  onPressed: () => confirmLeaveGame(context, ref),
+                  icon: const Icon(Icons.logout, size: 16, color: AppColors.danger),
+                  label: const Text('Leave game',
+                      style: TextStyle(color: AppColors.danger)),
                 ),
               ],
             ),
@@ -785,6 +825,18 @@ class _PlayingScreenState extends ConsumerState<_PlayingScreen> {
       });
     });
 
+    // A big notice for everyone, e.g. a player is out of cards and CABO is called
+    ref.listenManual(announcementProvider, (_, notice) {
+      if (notice == null) return;
+      setState(() {
+        _addAnimation((key, remove) => AnnouncementBanner(
+              key: key,
+              text: notice.text,
+              onDone: remove,
+            ));
+      });
+    });
+
     // Queen/King: show everyone which positions were picked
     ref.listenManual(cardsPickedProvider, (_, pick) {
       if (pick == null) return;
@@ -922,6 +974,7 @@ class _PlayingScreenState extends ConsumerState<_PlayingScreen> {
                   gs: gs,
                   localPlayerId: myId,
                   onHistoryTap: () => _openHistory(context),
+                  onExitTap: () => confirmLeaveGame(context, ref),
                 ),
                 Expanded(child: _buildTable(powerSel)),
                 _buildActionBar(powerSel),
@@ -940,11 +993,27 @@ class _PlayingScreenState extends ConsumerState<_PlayingScreen> {
                         SlapStatus(
                           isActive: gs.matchWindowOpen && !_iAmEliminated,
                         ),
-                        // Above the badge, without moving it
-                        if (slapRows.isNotEmpty)
+                        // Turn countdown just above the badge, without moving it
+                        if (_timerPlayerId != null)
                           Positioned(
                             right: 0,
                             bottom: 78,
+                            child: TurnCountdown(
+                              deadline: _timerDeadlineFor(_timerPlayerId!)!,
+                              total: _timerTotal ??
+                                  Duration(milliseconds: gs.turnTimeLeftMs!),
+                              who: _timerPlayerId == myId
+                                  ? 'You'
+                                  : _playerName(_timerPlayerId!),
+                            ),
+                          ),
+                        // Above the badge (and the countdown), without moving it
+                        if (slapRows.isNotEmpty)
+                          Positioned(
+                            right: 0,
+                            bottom: _timerPlayerId != null
+                                ? 78 + TurnCountdown.height + 8
+                                : 78,
                             child: SlapRanking(
                               triedCount: _slapRanking!.entries.length,
                               rows: slapRows,
@@ -2122,8 +2191,6 @@ class _RoundEndScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final winner = roundEnd.scores.firstWhere((s) => s.isWinner);
-    final iWon = localPlayer.id == winner.playerId;
     final scoreMap = {for (final s in roundEnd.scores) s.playerId: s};
 
     final caller = gameState.caboCallerId == null
@@ -2149,7 +2216,8 @@ class _RoundEndScreen extends ConsumerWidget {
               child: Column(
                 children: [
                   Text(
-                    iWon ? '🎉 You Win!' : '🏆 ${winner.playerName} Wins!',
+                    roundEndHeadline(roundEnd, localPlayer.id),
+                    textAlign: TextAlign.center,
                     style: const TextStyle(
                       fontSize: 26,
                       fontWeight: FontWeight.bold,

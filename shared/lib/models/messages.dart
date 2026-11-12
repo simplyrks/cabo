@@ -35,6 +35,8 @@ class MsgType {
   static const slapActivated = 'slapActivated'; // banner for everyone, maybe with a countdown
   static const rejoinFailed = 'rejoinFailed'; // the seat is gone, e.g. the round ended
   static const seatTaken = 'seatTaken'; // the same seat connected from somewhere else
+  static const leaveGame = 'leaveGame'; // a player quits mid-game for good
+  static const announcement = 'announcement'; // a big notice for every screen, e.g. auto CABO
   static const slapRanking = 'slapRanking'; // who tried to slap this card, in order
   static const tableAnimation = 'tableAnimation'; // card movements for every screen to play
   static const matchAttemptResult = 'matchAttemptResult';
@@ -606,6 +608,10 @@ class RoundEndPayload {
   final String winnerId;
 
   const RoundEndPayload({required this.scores, required this.winnerId});
+
+  /// Everyone on the lowest points. More than one is a tie.
+  List<PlayerScore> get winners => scores.where((s) => s.isWinner).toList();
+  bool get isTie => winners.length > 1;
 
   Map<String, dynamic> toJson() => {
         'scores': scores.map((s) => s.toJson()).toList(),

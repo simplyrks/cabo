@@ -32,13 +32,13 @@ void main() {
     expect(winner.playerId, 'cutu');
   });
 
-  test('tied points: fewer cards wins', () {
+  test('tied points is a tie, whatever the card count', () {
     final engine = table(
       [[null, null], [two, null]],
       [[null, ace], [ace, null]],
     );
-    final winner = engine.computeScores().singleWhere((s) => s.isWinner);
-    expect(winner.playerId, 'ravi');
+    final winners = engine.computeScores().where((s) => s.isWinner);
+    expect(winners.map((s) => s.playerId).toSet(), {'ravi', 'cutu'});
   });
 
   test('eliminated players finish last whatever their points', () {
