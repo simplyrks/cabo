@@ -101,12 +101,17 @@ class GameRoom {
   final Map<String, String> _seatKeys = {};
   final _random = Random.secure();
 
-  /// How long the table waits for an away player before playing for them.
+  // ─── Turn timers ───────────────────────────────────────────────────────────────
+  static const _drawTime = Duration(seconds: 10);
+  static const _decideTime = Duration(seconds: 15);
+  static const _powerTime = Duration(seconds: 15);
+  /// How long the table waits for an away player who owes a card.
   static const _awayGrace = Duration(seconds: 15);
-  Timer? _awayTimer;
-  /// What the away timer is waiting on, e.g. 'turn:<id>:cardDrawn'.
-  String? _awayTimerFor;
-  int _awayDeadlineUs = 0;
+  Timer? _turnTimer;
+  /// What the timer is waiting on, e.g. 'turn:<id>:cardDrawn'.
+  String? _turnTimerFor;
+  int _turnDeadlineUs = 0;
+  Duration _turnTimerTotal = Duration.zero;
 
   /// With nobody connected mid-game, how long the game is kept for them.
   static const _abandonAfter = Duration(minutes: 2);
@@ -451,7 +456,13 @@ class GameRoom {
   void _onDiscardDrawn(WebSocket ws, Map<String, dynamic> payload) {
     final session = _sessionFor(ws);
     if (session == null) return;
-    final name = _nameOf(session.playerId);
+    // "Discard, slap, then power": a 3-2-1 for everyone, a slap window on the
+    // discarded card, and only then the power.
+    _discardDrawn(session.playerId, slapFirst: payload['slapFirst'] == true);
+  }
+
+  void _discardDrawn(String playerId, {bool slapFirst = false}) {
+    final name = _nameOf(playerId);
     // Capture drawn card BEFORE discarding
     final drawnCard = _engine.state.drawnCard;
     final drawnRank = drawnCard?.rank.name ?? '';
@@ -459,13 +470,9 @@ class GameRoom {
         ? _cardLabel(drawnCard.rank.name, drawnCard.suit.name)
         : 'a card';
     // For Jack: the skipped player is whoever was next before we advance
-    final wouldBeNextId = _engine.state.getNextPlayerId(session.playerId);
+    final wouldBeNextId = _engine.state.getNextPlayerId(playerId);
 
-    // "Discard, slap, then power": a 3-2-1 for everyone, a slap window on the
-    // discarded card, and only then the power.
-    final slapFirst = payload['slapFirst'] == true;
-
-    _engine.discardDrawn(session.playerId);
+    _engine.discardDrawn(playerId);
     _cancelSlapCountdown();
     _clearSlapFirst();
     final hasPower = _engine.state.turnPhase == TurnPhase.usingPower;
@@ -493,7 +500,7 @@ class GameRoom {
     _animate(TableAnimationPayload(
       moves: [
         CardMove(
-          from: CardSpot.heldBy(session.playerId),
+          from: CardSpot.heldBy(playerId),
           to: const CardSpot.discardPile(),
           card: drawnCard,
         ),
@@ -504,7 +511,7 @@ class GameRoom {
     _checkRoundEnd();
     if (_engine.state.phase != GamePhase.playing) return;
     if (slapFirst) {
-      _startSlapCountdown(session.playerId);
+      _startSlapCountdown(playerId);
     } else if (!hasPower) {
       // A power card's slap window waits until the power is finished.
       _openMatchWindow();
@@ -1067,9 +1074,7 @@ class GameRoom {
     _clearSlaps();
     _cancelSlapCountdown();
     _clearSlapFirst();
-    _awayTimer?.cancel();
-    _awayTimer = null;
-    _awayTimerFor = null;
+    _stopTurnTimer();
     _abandonTimer?.cancel();
     _abandonTimer = null;
     _seatKeys.clear();
@@ -1083,10 +1088,11 @@ class GameRoom {
     if (_connections.isEmpty) onEmpty(this);
   }
 
-  // ─── Away players ─────────────────────────────────────────────────────────────
+  // ─── Turn timers ───────────────────────────────────────────────────────────────
 
-  /// What the game is waiting on from a player who is away, if anything.
-  String? _awayWaitingOn() {
+  /// What the game is waiting on, if it's timed: the current player's draw,
+  /// decision or power, or a card owed by a player who is away.
+  String? _timedWait() {
     final state = _engine.state;
     if (state.phase != GamePhase.playing || _peekHoldActorId != null) return null;
     final giver = _pendingGiveCardAttackerId;
@@ -1095,39 +1101,59 @@ class GameRoom {
     }
     final current = state.currentPlayerId;
     final player = current == null ? null : state.getPlayer(current);
-    if (player == null || player.isConnected || player.isEliminated) return null;
-    return 'turn:$current:${state.turnPhase.name}';
+    if (player == null || player.isEliminated) return null;
+    // Letting everyone slap before the power, then the power itself, are timed apart
+    final stage = _slapBeforePower ? ':slapFirst' : '';
+    return 'turn:$current:${state.turnPhase.name}$stage';
   }
 
-  /// Starts, keeps or stops the countdown to playing for an away player.
-  void _scheduleAway() {
-    final waitingOn = _awayWaitingOn();
-    if (waitingOn == _awayTimerFor) return;
-    _awayTimer?.cancel();
-    _awayTimer = null;
-    _awayTimerFor = waitingOn;
+  Duration _timeFor(String waitingOn) {
+    if (waitingOn.startsWith('give:')) return _awayGrace;
+    return switch (_engine.state.turnPhase) {
+      TurnPhase.waitingForDraw => _drawTime,
+      TurnPhase.cardDrawn => _decideTime,
+      _ => _powerTime,
+    };
+  }
+
+  /// Starts, keeps or stops the timer for whatever the game is waiting on.
+  void _scheduleTurnTimer() {
+    final waitingOn = _timedWait();
+    if (waitingOn == _turnTimerFor) return;
+    _turnTimer?.cancel();
+    _turnTimer = null;
+    _turnTimerFor = waitingOn;
     if (waitingOn == null) return;
-    _awayDeadlineUs = _clock.elapsedMicroseconds + _awayGrace.inMicroseconds;
-    _awayTimer = Timer(_awayGrace, () => _playForAway(waitingOn));
+    _turnTimerTotal = _timeFor(waitingOn);
+    _turnDeadlineUs = _clock.elapsedMicroseconds + _turnTimerTotal.inMicroseconds;
+    _turnTimer = Timer(_turnTimerTotal, () => _onTurnTimeout(waitingOn));
   }
 
-  int? get _awayActionInMs => _awayTimerFor == null
-      ? null
-      : max(0, (_awayDeadlineUs - _clock.elapsedMicroseconds) ~/ 1000);
+  void _stopTurnTimer() {
+    _turnTimer?.cancel();
+    _turnTimer = null;
+    _turnTimerFor = null;
+  }
 
-  /// The away player didn't come back in time, so the game makes their move:
-  /// skip the turn, discard a drawn card with no power, or give a random card.
-  void _playForAway(String waitingOn) {
-    _awayTimer = null;
-    _awayTimerFor = null;
-    if (_awayWaitingOn() != waitingOn) {
-      _broadcastState(); // things moved on; schedule whatever comes next
+  int? get _turnTimeLeftMs => _turnTimerFor == null
+      ? null
+      : max(0, (_turnDeadlineUs - _clock.elapsedMicroseconds) ~/ 1000);
+
+  /// Time ran out, so the game makes the move: skip the turn, discard the
+  /// drawn card (its power still usable), skip the power, or give a random card
+  /// for an away player. An away player's drawn card goes without its power.
+  void _onTurnTimeout(String waitingOn) {
+    _turnTimer = null;
+    _turnTimerFor = null;
+    if (_timedWait() != waitingOn) {
+      _broadcastState(); // things moved on; time whatever comes next
       return;
     }
     _resolveSlaps();
     final parts = waitingOn.split(':');
     final playerId = parts[1];
     final name = _nameOf(playerId);
+    final away = !(_engine.state.getPlayer(playerId)?.isConnected ?? false);
     try {
       if (parts[0] == 'give') {
         final slot = _engine.randomOccupiedSlot(playerId);
@@ -1139,6 +1165,25 @@ class GameRoom {
         }
         _log('⏭ $name is away — a random card was given for them.');
         _giveCard(playerId, slot.$1, slot.$2);
+        return;
+      }
+      if (!away) {
+        switch (_engine.state.turnPhase) {
+          case TurnPhase.waitingForDraw:
+            _engine.skipTurn(playerId);
+            _log('⏰ $name ran out of time — turn skipped.');
+            _broadcastState();
+            _checkRoundEnd();
+          case TurnPhase.cardDrawn:
+            _log('⏰ $name ran out of time — their card is discarded.');
+            _discardDrawn(playerId);
+          case TurnPhase.usingPower:
+            _engine.skipPower(playerId);
+            _log('⏰ $name ran out of time — power skipped.');
+            _afterSkippedPower();
+          default:
+            break; // other phases aren't used by the game
+        }
         return;
       }
       switch (_engine.state.turnPhase) {
@@ -1170,7 +1215,7 @@ class GameRoom {
           break; // other phases aren't used by the game
       }
     } catch (e) {
-      print('[Room $code] Could not play for $name: $e');
+      print('[Room $code] Could not move for $name: $e');
       _broadcastState();
     }
   }
@@ -1255,8 +1300,8 @@ class GameRoom {
   }
 
   void _broadcastState() {
-    _scheduleAway();
-    final awayActionInMs = _awayActionInMs;
+    _scheduleTurnTimer();
+    final turnTimeLeftMs = _turnTimeLeftMs;
     final slapOpensInMs = _slapOpensInMs;
     for (final session in _sessions.values) {
       final statePayload = _engine.buildStateFor(
@@ -1268,7 +1313,8 @@ class GameRoom {
         peekHoldTargetId: _peekHoldTargetId,
         peekHoldRow: _peekHoldRow,
         peekHoldCol: _peekHoldCol,
-        awayActionInMs: awayActionInMs,
+        turnTimeLeftMs: turnTimeLeftMs,
+        turnTimeTotalMs: turnTimeLeftMs == null ? null : _turnTimerTotal.inMilliseconds,
         slapBeforePower: _slapBeforePower,
         slapOpensInMs: slapOpensInMs,
         // Closed for anyone who has already used their attempt on this card.

@@ -168,6 +168,14 @@ class _BasicsTab extends StatelessWidget {
           indent: true),
       _Bullet(
           'Or, instead of drawing, call CABO at the start of your turn (see Winning).'),
+      _Heading('Turn timer'),
+      _Bullet(
+          'You have 10 seconds to draw. If time runs out, your turn is skipped.'),
+      _Bullet(
+          'You then have 15 seconds to swap or discard. If time runs out, the card '
+          'is discarded for you, and you can still use its power.'),
+      _Bullet(
+          'Using a power gets another 15 seconds. If time runs out, the power is skipped.'),
       _Heading('Good to know'),
       _Bullet(
           'When the deck runs out, the discard pile is shuffled into a new deck.'),

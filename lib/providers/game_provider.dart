@@ -220,8 +220,10 @@ class GameStateModel {
   final String? peekHoldTargetId;
   final int? peekHoldRow;
   final int? peekHoldCol;
-  /// The current player is away: how long until the game plays for them.
-  final int? awayActionInMs;
+  /// How long until the game moves for the player it's waiting on, and how
+  /// long that turn timer was in total.
+  final int? turnTimeLeftMs;
+  final int? turnTimeTotalMs;
   /// The current player is letting everyone slap before using their power.
   final bool slapBeforePower;
   /// A 3-2-1 is running: how long until slapping opens.
@@ -249,7 +251,8 @@ class GameStateModel {
     this.peekHoldTargetId,
     this.peekHoldRow,
     this.peekHoldCol,
-    this.awayActionInMs,
+    this.turnTimeLeftMs,
+    this.turnTimeTotalMs,
     this.slapBeforePower = false,
     this.slapOpensInMs,
     DateTime? receivedAt,
@@ -275,7 +278,8 @@ class GameStateModel {
         peekHoldTargetId: p.peekHoldTargetId,
         peekHoldRow: p.peekHoldRow,
         peekHoldCol: p.peekHoldCol,
-        awayActionInMs: p.awayActionInMs,
+        turnTimeLeftMs: p.turnTimeLeftMs,
+        turnTimeTotalMs: p.turnTimeTotalMs,
         slapBeforePower: p.slapBeforePower,
         slapOpensInMs: p.slapOpensInMs,
       );

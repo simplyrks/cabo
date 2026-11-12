@@ -585,7 +585,8 @@ class GameEngine {
     String? peekHoldTargetId,
     int? peekHoldRow,
     int? peekHoldCol,
-    int? awayActionInMs,
+    int? turnTimeLeftMs,
+    int? turnTimeTotalMs,
     bool slapBeforePower = false,
     int? slapOpensInMs,
   }) {
@@ -616,7 +617,8 @@ class GameEngine {
       peekHoldTargetId: peekHoldTargetId,
       peekHoldRow: peekHoldRow,
       peekHoldCol: peekHoldCol,
-      awayActionInMs: awayActionInMs,
+      turnTimeLeftMs: turnTimeLeftMs,
+      turnTimeTotalMs: turnTimeTotalMs,
       slapBeforePower: slapBeforePower,
       slapOpensInMs: slapOpensInMs,
     );

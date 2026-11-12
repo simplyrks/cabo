@@ -111,8 +111,10 @@ class GameStatePayload {
   /// Which card position is being looked at. Never the card itself.
   final int? peekHoldRow;
   final int? peekHoldCol;
-  /// The current player is away: how long until the game plays for them.
-  final int? awayActionInMs;
+  /// How long until the game moves for the player it's waiting on (the turn
+  /// timer), and how long that timer was in total.
+  final int? turnTimeLeftMs;
+  final int? turnTimeTotalMs;
   /// The current player discarded a power card and is letting everyone slap
   /// it before they use the power.
   final bool slapBeforePower;
@@ -139,7 +141,8 @@ class GameStatePayload {
     this.peekHoldTargetId,
     this.peekHoldRow,
     this.peekHoldCol,
-    this.awayActionInMs,
+    this.turnTimeLeftMs,
+    this.turnTimeTotalMs,
     this.slapBeforePower = false,
     this.slapOpensInMs,
   });
@@ -164,7 +167,8 @@ class GameStatePayload {
         'peekHoldTargetId': peekHoldTargetId,
         'peekHoldRow': peekHoldRow,
         'peekHoldCol': peekHoldCol,
-        'awayActionInMs': awayActionInMs,
+        'turnTimeLeftMs': turnTimeLeftMs,
+        'turnTimeTotalMs': turnTimeTotalMs,
         'slapBeforePower': slapBeforePower,
         'slapOpensInMs': slapOpensInMs,
       };
@@ -204,7 +208,8 @@ class GameStatePayload {
       peekHoldTargetId: json['peekHoldTargetId'] as String?,
       peekHoldRow: json['peekHoldRow'] as int?,
       peekHoldCol: json['peekHoldCol'] as int?,
-      awayActionInMs: json['awayActionInMs'] as int?,
+      turnTimeLeftMs: json['turnTimeLeftMs'] as int?,
+      turnTimeTotalMs: json['turnTimeTotalMs'] as int?,
       slapBeforePower: json['slapBeforePower'] as bool? ?? false,
       slapOpensInMs: json['slapOpensInMs'] as int?,
     );
